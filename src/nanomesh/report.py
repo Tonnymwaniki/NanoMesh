@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from rich.console import Group
 from rich.panel import Panel
 from rich.table import Table
@@ -11,8 +9,8 @@ from rich.text import Text
 
 from nanomesh.hardware import DeviceProfile, compute_class
 from nanomesh.model import ModelInfo, analyze
-from nanomesh.planner import Plan, Requirements, memory_budgets, max_practical_params, plan
-from nanomesh.toolchain import BenchResult
+from nanomesh.planner import Plan, Requirements, Variant, memory_budgets, max_practical_params, plan
+from nanomesh.results import Result, evidence
 
 QUALITY_STYLE = {"lossless": "green", "high": "green", "good": "cyan", "fair": "yellow", "severe": "red"}
 REFERENCE_SIZES = ["1b", "3b", "7b", "13b", "32b", "70b"]
@@ -24,8 +22,20 @@ def _fmt_gb(gb: float | None) -> str:
     return f"{gb * 1024:.1f} MB" if gb < 1 else f"{gb:.2f} GB"
 
 
-def _fmt_speed(v: float | None) -> str:
-    return f"~{v:g} tok/s" if v is not None else "—"
+def _fmt_speed(v: float | None, source: str | None = "estimate") -> str:
+    if v is None:
+        return "—"
+    n = f"{v:.1f}" if v < 1000 else f"{v:,.0f}"
+    return {"measured": f"{n} tok/s ✓", "calibrated": f"{n} tok/s *"}.get(source, f"~{n} tok/s")
+
+
+def params_str(params: int) -> str:
+    return f"{params / 1e9:.1f}B" if params >= 1e8 else f"{params / 1e6:.1f}M"
+
+
+def _fmt_quality(v: Variant) -> Text:
+    pct = f"{v.quality_pct:g}% ✓" if v.quality_measured else f"~{v.quality_pct:g}%"
+    return Text(f"{v.quality} {pct}", style=QUALITY_STYLE[v.quality])
 
 
 def device_passport(device: DeviceProfile) -> Panel:
@@ -33,6 +43,8 @@ def device_passport(device: DeviceProfile) -> Panel:
     spec.add_column(style="bold")
     spec.add_column()
     rows = [
+        ("Recognised as", device.matched_id if device.is_local else None),
+        ("Type", device.kind),
         ("CPU", device.cpu), ("Cores", _cores(device)), ("Arch", device.arch), ("OS", device.os),
         ("RAM", f"{device.ram_gb:g} GB" + (f" ({device.available_ram_gb:g} GB free)" if device.available_ram_gb else "")),
         ("Memory BW", f"{device.memory_bandwidth_gbps:g} GB/s" if device.memory_bandwidth_gbps else None),
@@ -59,11 +71,14 @@ def device_passport(device: DeviceProfile) -> Panel:
     for col in ("Model size", "Best variant", "Memory", "Speed", "Runs on"):
         sizes.add_column(col)
     for size in REFERENCE_SIZES:
-        p = plan(analyze(size), device, Requirements(min_quality="fair"))
+        model = analyze(size)
+        # Device-level calibration applies; per-model measurements don't (these are generic sizes).
+        ev = evidence(device, model).model_copy(update={"speeds": {}, "quality": {}})
+        p = plan(model, device, Requirements(min_quality="fair"), ev)
         v = next((x for x in p.variants if x.format.name == p.recommended), None)
         if v:
-            sizes.add_row(size.upper(), Text(v.format.label, style=QUALITY_STYLE[v.format.quality]),
-                          f"{v.total_memory_gb:.1f} GB", _fmt_speed(v.tokens_per_s), v.placement or "")
+            sizes.add_row(size.upper(), Text(v.format.label, style=QUALITY_STYLE[v.quality]),
+                          f"{v.total_memory_gb:.1f} GB", _fmt_speed(v.tokens_per_s, v.speed_source), v.placement or "")
         else:
             sizes.add_row(size.upper(), Text("won't fit", style="red"), "", "", "")
 
@@ -92,7 +107,7 @@ def model_summary(m: ModelInfo) -> Table:
     t.add_column(style="bold")
     t.add_column()
     rows = [
-        ("Model", m.name), ("Architecture", m.architecture), ("Parameters", f"{m.params_b:.2f}B" if m.params >= 1e8 else f"{m.params / 1e6:.2f}M"),
+        ("Model", m.name), ("Architecture", m.architecture), ("Parameters", params_str(m.params)),
         ("Weights dtype", m.source_dtype), ("Layers", m.num_layers), ("Hidden size", m.hidden_size),
         ("Attention", f"{m.num_attention_heads} heads, {m.num_kv_heads} KV heads" if m.num_attention_heads else None),
         ("Vocab", m.vocab_size), ("Max context", m.max_context),
@@ -106,18 +121,17 @@ def model_summary(m: ModelInfo) -> Table:
 
 
 def plan_view(p: Plan) -> Group:
-    table = Table(title=f"{p.model.name} ({p.model.params_b:.1f}B) on {p.device.name}",
+    table = Table(title=f"{p.model.name} ({params_str(p.model.params)}) on {p.device.name}",
                   header_style="bold", title_justify="left")
     table.add_column("", width=2, no_wrap=True)
     table.add_column("Variant", no_wrap=True)
-    for col in ("Memory", "Smaller", "Speed", "Quality", "Runs on"):
+    for col in ("Memory", "Speed", "Quality", "Runs on"):
         table.add_column(col, no_wrap=True)
     for v in p.variants:
         mark = "🏆" if v.format.name == p.recommended else ("•" if v.pareto else "")
         table.add_row(
             mark, f"{v.format.label} [dim]{v.format.name}", f"{v.total_memory_gb:.1f} GB",
-            f"{v.compression:.0%}", _fmt_speed(v.tokens_per_s),
-            Text(v.format.quality, style=QUALITY_STYLE[v.format.quality]),
+            _fmt_speed(v.tokens_per_s, v.speed_source), _fmt_quality(v),
             v.placement or "✕", style=None if v.meets_requirements else "dim",
         )
 
@@ -129,7 +143,7 @@ def plan_view(p: Plan) -> Group:
         summary.append(f"\n🏆 Recommended: {rec.format.label} ({rec.format.name}) on {rec.placement}", style="bold green")
         summary.append(f" — {rec.total_memory_gb:.1f} GB, {rec.compression:.0%} smaller than FP16")
         if rec.tokens_per_s:
-            summary.append(f", {_fmt_speed(rec.tokens_per_s)}")
+            summary.append(f", {_fmt_speed(rec.tokens_per_s, rec.speed_source)}")
         summary.append(f"\n  {rec.format.note}")
         summary.append("\n✓ Meets your requirements\n", style="green")
     else:
@@ -141,19 +155,31 @@ def plan_view(p: Plan) -> Group:
             summary.append(f"  {v.format.label}: {'; '.join(v.reasons)}\n", style="dim")
     for a in p.advice:
         summary.append(f"→ {a}\n", style="yellow")
-    summary.append("• = Pareto-optimal (no smaller variant of equal or better quality)", style="dim")
+    summary.append("• Pareto-optimal (no smaller variant of equal or better quality)\n", style="dim")
+    summary.append("✓ measured on this device · * calibrated from this device's benchmarks · ~ estimate", style="dim")
     return Group(table, summary)
 
 
-def bench_table(results: list[BenchResult]) -> Table:
-    t = Table(title="Benchmark (measured with llama-bench)", header_style="bold", title_justify="left")
-    t.add_column("Model file", overflow="fold")
-    for col in ("Size", "Prompt", "Generate", "Peak RAM", "Backend"):
-        t.add_column(col)
+def bench_table(results: list[Result]) -> Table:
+    t = Table(title="Measured on this machine", header_style="bold", title_justify="left")
+    for col in ("Variant", "Size", "Prompt", "Generate", "Peak RAM", "Quality"):
+        t.add_column(col, no_wrap=col != "Variant")
     for r in results:
-        t.add_row(Path(r.model_file).name, _fmt_gb(r.size_gb),
+        q = f"{r.quality_pct:g}% of {r.reference_format}" if r.quality_pct is not None else "—"
+        t.add_row(r.format or r.model_name, _fmt_gb(r.file_size_gb),
                   f"{r.prompt_tokens_per_s:g} tok/s" if r.prompt_tokens_per_s else "—",
                   f"{r.gen_tokens_per_s:g} tok/s" if r.gen_tokens_per_s else "—",
-                  _fmt_gb(r.peak_rss_gb), r.backend or "—")
+                  _fmt_gb(r.peak_rss_gb), q)
     return t
 
+
+def results_table(results: list[Result]) -> Table:
+    t = Table(title="Recorded benchmark results", header_style="bold", title_justify="left")
+    for col in ("When", "Device", "Model", "Variant", "Generate", "Peak RAM", "Quality"):
+        t.add_column(col)
+    for r in results:
+        size = params_str(r.model_params)
+        t.add_row(r.timestamp[:16].replace("T", " "), r.device_name, f"{r.model_name} ({size})", r.format or "?",
+                  f"{r.gen_tokens_per_s:g} tok/s" if r.gen_tokens_per_s else "—", _fmt_gb(r.peak_rss_gb),
+                  f"{r.quality_pct:g}%" if r.quality_pct is not None else "—")
+    return t

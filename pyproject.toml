@@ -21,7 +21,7 @@ nanomesh = "nanomesh.cli:app"
 where = ["src"]
 
 [tool.setuptools.package-data]
-nanomesh = ["data/*.json"]
+nanomesh = ["data/*.json", "data/*.txt"]
 
 [project.optional-dependencies]
 dev = ["pytest"]

@@ -25,13 +25,20 @@ export NANOMESH_LLAMA_CPP=~/llama.cpp   # contains convert_hf_to_gguf.py and bui
 ```
 
 Planning (`plan`, `device`, `scan-device`) works without llama.cpp.
+Windows, Linux, macOS and Android (via Termux) are supported; see
+[docs/testing-on-your-device.md](docs/testing-on-your-device.md) for a step-by-step walkthrough.
 
 ## Usage
 
 ### Device Passport: what can this machine run?
 
+`scan-device` recognises the exact machine (e.g. "HP EliteBook 840 G3", "ThinkPad T480",
+"Redmi 14C") from its firmware or Android system properties, and merges in the curated
+database profile for it: live facts like RAM win, the database fills in what can't be probed,
+such as memory bandwidth.
+
 ```sh
-nanomesh scan-device                 # profile this machine
+nanomesh scan-device                 # profile and recognise this machine
 nanomesh devices                     # list the device database
 nanomesh devices android             # search it
 nanomesh device thinkpad-t480        # passport for a known device
@@ -83,7 +90,7 @@ Requirements you can set:
 | Option | Meaning |
 |---|---|
 | `--context N` | Context length to reserve KV cache for (default 4096) |
-| `--min-quality` | `lossless`, `high`, `good` (default), `fair`, `severe` |
+| `--min-quality` | A percentage like `95`, or a tier: `lossless`, `high`, `good` (default), `fair`, `severe` |
 | `--min-speed N` | Minimum generation speed in tokens/s |
 | `--ram N` | Cap the memory the model may use, in GB |
 | `--prefer` | Tie-break among valid variants: `quality` (default), `speed`, `size` |
@@ -112,11 +119,22 @@ my-model-nanomesh-redmi-14c-4gb/
 ### Benchmark: measure instead of estimate
 
 ```sh
-nanomesh benchmark model-Q4_K_M.gguf
-nanomesh benchmark ./my-model-nanomesh-local/ --save results.json
+nanomesh benchmark ./models/qwen1.5b/            # every .gguf in the folder
+nanomesh benchmark model-Q4_K_M.gguf --reference model-F16.gguf
+nanomesh results                                  # everything measured on this machine
 ```
 
-Runs `llama-bench` and records prompt/generation throughput and peak resident memory.
+For each file, `benchmark` measures prompt/generation speed and peak RAM (`llama-bench`)
+and quality: perplexity relative to the highest-precision variant that fits in memory
+(`llama-perplexity`, on a bundled public-domain text; `--eval-text` to use your own).
+
+Results are appended to `~/.nanomesh/results.jsonl` (override with `NANOMESH_HOME`), and
+from then on `plan` uses them:
+
+- **✓ measured**: the exact speed/quality of variants you benchmarked
+- **\* calibrated**: other variants and models on the same device, using the memory
+  bandwidth your benchmarks showed the device actually delivers
+- **~ estimate**: nothing measured yet
 
 ## How the estimates work
 
@@ -125,11 +143,12 @@ Runs `llama-bench` and records prompt/generation throughput and peak resident me
 - **Budget** = 92% of VRAM on a discrete GPU; 45% of RAM on phones (Android kills apps early);
   70% of RAM elsewhere; 85% of *free* RAM for the local machine. Variants using more than 90%
   of the budget are only chosen when nothing else fits.
-- **Speed** — token generation is memory-bandwidth bound, so
-  tok/s ≈ bandwidth × efficiency ÷ bytes read per token. Devices without bandwidth data show `—`;
-  run `nanomesh benchmark` on them.
-- **Quality** tiers follow llama.cpp's published perplexity deltas per format. They are
-  typical, not measured on your model.
+- **Speed**: token generation is memory-bandwidth bound, so
+  tok/s ≈ bandwidth × efficiency ÷ bytes read per token. Devices without bandwidth data show `—`
+  until you run `nanomesh benchmark` on them, which calibrates the device.
+- **Quality** is reference perplexity ÷ variant perplexity, as a percentage. Before measuring,
+  each format uses a conservative typical value from llama.cpp's published perplexity deltas;
+  tiers are derived from it (lossless ≥ 99.8%, high ≥ 98.5%, good ≥ 96%, fair ≥ 90%).
 
 Treat estimates as a way to narrow the search; `benchmark` is the ground truth.
 
@@ -137,9 +156,11 @@ Treat estimates as a way to narrow the search; `benchmark` is the ground truth.
 
 - [x] Model analyzer (safetensors headers, no torch), device scan and Device Passport
 - [x] Device database, planner with Pareto selection, GGUF build + llama-bench measurement
-- [ ] Quality measurement (perplexity on a held-out set) for each built variant
+- [x] Exact device recognition (Windows, Linux, macOS, Android) matched to the database
+- [x] Quality measurement (perplexity vs reference), local results store, per-device calibration
+- [ ] Validate and tune estimates on real hardware (first: HP EliteBook 840 G3)
 - [ ] ONNX / OpenVINO / LiteRT export; AWQ/GPTQ; vision models
-- [ ] Shared benchmark database: measured results feed back into estimates per device
+- [ ] Shared benchmark database: upload `results.jsonl` so every user of a device benefits
 - [ ] Android on-device benchmarking, NPU profiles
 - [ ] NanoMesh Cloud: upload a model, pick a device, download the optimized package
 
@@ -150,5 +171,6 @@ pip install -e '.[dev]'
 pytest
 ```
 
-Adding a device: append a profile to `src/nanomesh/data/devices.json`. Only include specs you
+Adding a device: append a profile to `src/nanomesh/data/devices.json`, with `match` regexes for
+the vendor/model strings `nanomesh scan-device --json` reports on it. Only include specs you
 can source; leave `memory_bandwidth_gbps` out rather than guessing.

@@ -197,7 +197,7 @@ def _analyze_dir(path: Path) -> ModelInfo:
     info: dict = {"name": path.name, "source": "safetensors"}
     config_path = path / "config.json"
     if config_path.exists():
-        _from_config(info, json.loads(config_path.read_text()))
+        _from_config(info, json.loads(config_path.read_text(encoding="utf-8")))
     files = sorted(path.glob("*.safetensors"))
     ggufs = sorted(path.glob("*.gguf"))
     if files:

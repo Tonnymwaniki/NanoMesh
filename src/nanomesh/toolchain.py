@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -26,6 +27,7 @@ class Toolchain(BaseModel):
     convert_script: Path | None = None
     quantize: Path | None = None
     bench: Path | None = None
+    perplexity: Path | None = None
 
     @property
     def can_convert(self) -> bool:
@@ -33,10 +35,15 @@ class Toolchain(BaseModel):
 
 
 def _find_binary(name: str, roots: list[Path]) -> Path | None:
+    names = [name + ".exe", name] if sys.platform == "win32" else [name]
+    # CMake puts Windows binaries under build/bin/Release.
+    subdirs = ("", "bin", "build/bin", "build/bin/Release")
     for root in roots:
-        for candidate in (root / name, root / "bin" / name, root / "build" / "bin" / name):
-            if candidate.is_file() and os.access(candidate, os.X_OK):
-                return candidate
+        for sub in subdirs:
+            for n in names:
+                candidate = root / sub / n
+                if candidate.is_file() and os.access(candidate, os.X_OK):
+                    return candidate
     found = shutil.which(name)
     return Path(found) if found else None
 
@@ -48,6 +55,7 @@ def find_toolchain() -> Toolchain:
         convert_script=convert,
         quantize=_find_binary("llama-quantize", roots),
         bench=_find_binary("llama-bench", roots),
+        perplexity=_find_binary("llama-perplexity", roots),
     )
 
 
@@ -141,3 +149,36 @@ def _sample_peak_rss(proc: subprocess.Popen) -> int:
     except psutil.Error:
         proc.wait()
     return peak
+
+
+EVAL_CONTEXT = 512
+EVAL_CHUNKS = 16
+
+
+def default_eval_text() -> Path:
+    from importlib import resources
+
+    return Path(str(resources.files("nanomesh.data").joinpath("eval_text.txt")))
+
+
+def parse_perplexity(output: str) -> float:
+    m = re.search(r"Final estimate: PPL = ([0-9.]+)", output)
+    if not m:
+        raise ToolchainError("Could not find the final perplexity in llama-perplexity output.")
+    return float(m.group(1))
+
+
+def measure_perplexity(tc: Toolchain, model_file: Path, text: Path | None = None,
+                       threads: int | None = None, chunks: int = EVAL_CHUNKS) -> float:
+    """Perplexity of a GGUF model on an evaluation text (lower is better)."""
+    if not tc.perplexity:
+        raise ToolchainError("llama-perplexity not found. Install llama.cpp and set NANOMESH_LLAMA_CPP.")
+    cmd = [str(tc.perplexity), "-m", str(model_file), "-f", str(text or default_eval_text()),
+           "-c", str(EVAL_CONTEXT), "--chunks", str(chunks)]
+    if threads:
+        cmd += ["-t", str(threads)]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    output = result.stdout + result.stderr
+    if result.returncode != 0:
+        raise ToolchainError(f"llama-perplexity failed:\n{output.strip()[-2000:]}")
+    return parse_perplexity(output)

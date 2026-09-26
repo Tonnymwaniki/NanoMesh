@@ -33,27 +33,9 @@ def test_analyze_unknown_raises():
 
 
 def test_analyze_gguf_reads_header(tmp_path):
-    import struct
+    from conftest import write_gguf
 
-    def s(x):
-        b = x.encode()
-        return struct.pack("<Q", len(b)) + b
-
-    kv = [("general.architecture", 8, s("llama")), ("general.name", 8, s("tiny")),
-          ("llama.block_count", 4, struct.pack("<I", 2)),
-          ("llama.embedding_length", 4, struct.pack("<I", 64)),
-          ("llama.attention.head_count", 4, struct.pack("<I", 4)),
-          ("llama.attention.head_count_kv", 4, struct.pack("<I", 2)),
-          ("tokenizer.ggml.scores", 9, struct.pack("<IQ", 6, 3) + struct.pack("<3f", 0, 0, 0)),
-          ("tokenizer.ggml.tokens", 9, struct.pack("<IQ", 8, 2) + s("a") + s("b"))]
-    tensors = [("token_embd.weight", [64, 100]), ("blk.0.attn_q.weight", [64, 64])]
-    data = b"GGUF" + struct.pack("<IQQ", 3, len(tensors), len(kv))
-    for key, t, v in kv:
-        data += s(key) + struct.pack("<I", t) + v
-    for name, dims in tensors:
-        data += s(name) + struct.pack("<I", len(dims)) + struct.pack(f"<{len(dims)}Q", *dims) + struct.pack("<IQ", 1, 0)
-    f = tmp_path / "m.gguf"
-    f.write_bytes(data)
+    f = write_gguf(tmp_path / "m.gguf", file_type=15)
     info = analyze(str(f))
     assert info.params == 64 * 100 + 64 * 64
     assert (info.name, info.architecture, info.num_layers, info.num_kv_heads, info.head_dim) == ("tiny", "llama", 2, 2, 16)

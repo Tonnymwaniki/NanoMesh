@@ -47,3 +47,76 @@ def test_parse_llama_bench(tmp_path):
     assert r.prompt_tokens_per_s == 101.23
     assert r.gen_tokens_per_s == 12.35
     assert r.threads == 4
+
+
+FAKE_BENCH = """#!{python}
+import json, sys
+m = sys.argv[sys.argv.index("-m") + 1]
+speed = 20.0 if "Q4" in m else 10.0
+print(json.dumps([{{"n_prompt": 512, "n_gen": 0, "avg_ts": speed * 10, "backends": "CPU", "n_threads": 4}},
+                  {{"n_prompt": 0, "n_gen": 128, "avg_ts": speed, "backends": "CPU", "n_threads": 4}}]))
+"""
+FAKE_PPL = """#!{python}
+import sys
+m = sys.argv[sys.argv.index("-m") + 1]
+print("some log line", file=sys.stderr)
+print("Final estimate: PPL = %.4f +/- 0.1" % (10.5 if "Q4" in m else 10.0), file=sys.stderr)
+"""
+
+
+def _fake_llama_cpp(tmp_path):
+    import os
+    import stat
+    import sys
+
+    bin_dir = tmp_path / "llama.cpp" / "build" / "bin"
+    bin_dir.mkdir(parents=True)
+    for name, src in (("llama-bench", FAKE_BENCH), ("llama-perplexity", FAKE_PPL)):
+        f = bin_dir / name
+        f.write_text(src.format(python=sys.executable))
+        f.chmod(f.stat().st_mode | stat.S_IEXEC)
+    return os.pathsep.join([str(tmp_path / "llama.cpp")])
+
+
+def test_benchmark_measures_quality_and_feeds_plan(tmp_path, monkeypatch):
+    import sys
+
+    import pytest
+
+    if sys.platform == "win32":
+        pytest.skip("fake llama.cpp binaries are POSIX scripts")
+    from conftest import write_gguf
+
+    monkeypatch.setenv("NANOMESH_LLAMA_CPP", _fake_llama_cpp(tmp_path))
+    models = tmp_path / "models"
+    models.mkdir()
+    write_gguf(models / "model-F16.gguf", file_type=1)
+    write_gguf(models / "model-Q4_K_M.gguf", file_type=15)
+
+    result = runner.invoke(app, ["benchmark", str(models)])
+    assert result.exit_code == 0, result.output
+
+    rows = json.loads(runner.invoke(app, ["results", "--json"]).output)
+    by_fmt = {r["format"]: r for r in rows}
+    assert by_fmt["F16"]["quality_pct"] == 100.0
+    assert by_fmt["Q4_K_M"]["quality_pct"] == pytest.approx(95.24, abs=0.01)
+    assert by_fmt["Q4_K_M"]["gen_tokens_per_s"] == 20.0
+    assert by_fmt["Q4_K_M"]["reference_format"] == "F16"
+
+    plan = json.loads(runner.invoke(app, ["plan", str(models / "model-F16.gguf"), "--json"]).output)
+    q4 = next(v for v in plan["variants"] if v["format"]["name"] == "Q4_K_M")
+    assert q4["speed_source"] == "measured" and q4["quality_measured"] is True
+
+
+def test_min_quality_accepts_percentage():
+    result = runner.invoke(app, ["plan", "qwen2.5-7b", "-d", "rtx-3060-12gb", "--min-quality", "99.9", "--json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["recommended"] == "Q8_0"
+    bad = runner.invoke(app, ["plan", "7b", "--min-quality", "amazing"])
+    assert bad.exit_code == 1
+
+
+def test_parse_perplexity():
+    from nanomesh.toolchain import parse_perplexity
+
+    assert parse_perplexity("...\nFinal estimate: PPL = 7.1234 +/- 0.05123\n") == 7.1234
