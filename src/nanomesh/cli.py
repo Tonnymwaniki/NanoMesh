@@ -1,6 +1,7 @@
 import json
 import shlex
 import shutil
+import sys
 from pathlib import Path
 
 import typer
@@ -15,6 +16,14 @@ from nanomesh import results as store
 from nanomesh.evaluate import evaluate
 from nanomesh.report import bench_table, device_passport, model_summary, plan_view, results_table
 from nanomesh.toolchain import ToolchainError, conversion_commands, find_toolchain, run
+
+# Windows falls back to cp1252 when output is redirected (`nanomesh plan > out.txt`),
+# which can't encode the emoji and box characters in reports. Always emit UTF-8.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
 
 app = typer.Typer(help="NanoMesh — find the best way to run an AI model on specific hardware.",
                   no_args_is_help=True)

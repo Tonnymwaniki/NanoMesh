@@ -120,3 +120,16 @@ def test_parse_perplexity():
     from nanomesh.toolchain import parse_perplexity
 
     assert parse_perplexity("...\nFinal estimate: PPL = 7.1234 +/- 0.05123\n") == 7.1234
+
+
+def test_redirected_output_survives_a_legacy_windows_encoding(tmp_path):
+    # `nanomesh plan > out.txt` in PowerShell used to crash: stdout fell back to cp1252.
+    import os
+    import subprocess
+    import sys
+
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252", "NANOMESH_HOME": str(tmp_path)}
+    out = subprocess.run([sys.executable, "-m", "nanomesh.cli", "plan", "qwen2.5-1.5b", "-d", "hp-elitebook-840-g6"],
+                         capture_output=True, env=env)
+    assert out.returncode == 0, out.stderr.decode("utf-8", "replace")
+    assert "🏆" in out.stdout.decode("utf-8")
