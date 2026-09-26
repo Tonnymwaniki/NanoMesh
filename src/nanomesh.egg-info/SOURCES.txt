@@ -1,0 +1,10 @@
+README.md
+pyproject.toml
+src/nanomesh/__init__.py
+src/nanomesh/cli.py
+src/nanomesh.egg-info/PKG-INFO
+src/nanomesh.egg-info/SOURCES.txt
+src/nanomesh.egg-info/dependency_links.txt
+src/nanomesh.egg-info/entry_points.txt
+src/nanomesh.egg-info/requires.txt
+src/nanomesh.egg-info/top_level.txt
