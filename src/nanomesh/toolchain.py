@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -81,7 +82,7 @@ class BenchResult(BaseModel):
 
 def parse_llama_bench(output: str, model_file: Path) -> BenchResult:
     rows = json.loads(output)
-    res = BenchResult(model_file=str(model_file), size_gb=round(model_file.stat().st_size / 1024**3, 2))
+    res = BenchResult(model_file=str(model_file), size_gb=round(model_file.stat().st_size / 1024**3, 4))
     for row in rows:
         speed = row.get("avg_ts")
         if row.get("n_gen", 0) > 0 and row.get("n_prompt", 0) == 0:
@@ -107,22 +108,36 @@ def benchmark_gguf(tc: Toolchain, model_file: Path, threads: int | None = None,
 
 
 def _run_tracking_memory(cmd: list[str]) -> tuple[str, float | None]:
-    """Run a command, sampling its resident memory; return (stdout, peak RSS GB)."""
+    """Run a command; return (stdout, peak RSS in GB)."""
+    with tempfile.TemporaryFile("w+") as out, tempfile.TemporaryFile("w+") as err:
+        proc = subprocess.Popen(cmd, stdout=out, stderr=err, text=True)
+        if hasattr(os, "wait4"):
+            # The kernel tracks the child's exact peak RSS; no sampling needed.
+            _, status, usage = os.wait4(proc.pid, 0)
+            proc.returncode = os.waitstatus_to_exitcode(status)
+            # ru_maxrss is bytes on macOS, kilobytes elsewhere.
+            peak = usage.ru_maxrss * (1 if sys.platform == "darwin" else 1024)
+        else:
+            peak = _sample_peak_rss(proc)
+        out.seek(0)
+        err.seek(0)
+        if proc.returncode != 0:
+            raise ToolchainError(f"llama-bench failed:\n{err.read().strip()[-2000:]}")
+        return out.read(), (round(peak / 1024**3, 4) if peak else None)
+
+
+def _sample_peak_rss(proc: subprocess.Popen) -> int:
     import psutil
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     peak = 0
-    ps = psutil.Process(proc.pid)
-    while proc.poll() is None:
-        try:
+    try:
+        ps = psutil.Process(proc.pid)
+        while proc.poll() is None:
             peak = max(peak, ps.memory_info().rss)
-        except psutil.Error:
-            break
-        try:
-            proc.wait(timeout=0.2)
-        except subprocess.TimeoutExpired:
-            pass
-    out, err = proc.communicate()
-    if proc.returncode != 0:
-        raise ToolchainError(f"llama-bench failed:\n{err.strip()[-2000:]}")
-    return out, (round(peak / 1024**3, 2) if peak else None)
+            try:
+                proc.wait(timeout=0.1)
+            except subprocess.TimeoutExpired:
+                pass
+    except psutil.Error:
+        proc.wait()
+    return peak

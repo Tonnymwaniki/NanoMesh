@@ -176,14 +176,15 @@ def _choose(ok: list[Variant], prefer: str) -> Variant | None:
     if not ok:
         return None
     if prefer == "speed":
-        return max(ok, key=lambda v: (v.tokens_per_s or 0, -v.total_memory_gb))
+        return max(ok, key=lambda v: (v.tokens_per_s or 0, -v.format.bits_per_weight))
     if prefer == "size":
-        return min(ok, key=lambda v: v.total_memory_gb)
+        return min(ok, key=lambda v: v.format.bits_per_weight)
     # Highest quality tier first; within a tier the smaller variant wins
     # (so INT8 beats FP16: same quality, half the memory). Variants that only
     # just squeeze in are used only when nothing fits comfortably.
     ok = [v for v in ok if v.comfortable] or ok
-    return max(ok, key=lambda v: (QUALITY_TIERS.index(v.format.quality), -v.total_memory_gb))
+    # (Memory grows strictly with bits-per-weight, and unlike rounded GB it never ties.)
+    return max(ok, key=lambda v: (QUALITY_TIERS.index(v.format.quality), -v.format.bits_per_weight))
 
 
 def _mark_pareto(variants: list[Variant]) -> None:
@@ -193,7 +194,7 @@ def _mark_pareto(variants: list[Variant]) -> None:
     for v in fitting:
         q = QUALITY_TIERS.index(v.format.quality)
         v.pareto = not any(
-            QUALITY_TIERS.index(o.format.quality) >= q and o.total_memory_gb < v.total_memory_gb
+            QUALITY_TIERS.index(o.format.quality) >= q and o.format.bits_per_weight < v.format.bits_per_weight
             for o in fitting if o is not v
         )
 

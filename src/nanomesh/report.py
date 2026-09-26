@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from rich.console import Group
 from rich.panel import Panel
 from rich.table import Table
@@ -14,6 +16,12 @@ from nanomesh.toolchain import BenchResult
 
 QUALITY_STYLE = {"lossless": "green", "high": "green", "good": "cyan", "fair": "yellow", "severe": "red"}
 REFERENCE_SIZES = ["1b", "3b", "7b", "13b", "32b", "70b"]
+
+
+def _fmt_gb(gb: float | None) -> str:
+    if gb is None:
+        return "—"
+    return f"{gb * 1024:.1f} MB" if gb < 1 else f"{gb:.2f} GB"
 
 
 def _fmt_speed(v: float | None) -> str:
@@ -84,11 +92,11 @@ def model_summary(m: ModelInfo) -> Table:
     t.add_column(style="bold")
     t.add_column()
     rows = [
-        ("Model", m.name), ("Architecture", m.architecture), ("Parameters", f"{m.params_b:.2f}B"),
+        ("Model", m.name), ("Architecture", m.architecture), ("Parameters", f"{m.params_b:.2f}B" if m.params >= 1e8 else f"{m.params / 1e6:.2f}M"),
         ("Weights dtype", m.source_dtype), ("Layers", m.num_layers), ("Hidden size", m.hidden_size),
         ("Attention", f"{m.num_attention_heads} heads, {m.num_kv_heads} KV heads" if m.num_attention_heads else None),
         ("Vocab", m.vocab_size), ("Max context", m.max_context),
-        ("On disk", f"{m.disk_bytes / 1024**3:.2f} GB" if m.disk_bytes else None),
+        ("On disk", _fmt_gb(m.disk_bytes / 1024**3) if m.disk_bytes else None),
         ("KV cache", f"{m.kv_bytes_per_token() / 1024:.0f} KB/token (fp16)"),
     ]
     for k, v in rows:
@@ -139,12 +147,13 @@ def plan_view(p: Plan) -> Group:
 
 def bench_table(results: list[BenchResult]) -> Table:
     t = Table(title="Benchmark (measured with llama-bench)", header_style="bold", title_justify="left")
-    for col in ("Model file", "Size", "Prompt", "Generate", "Peak RAM", "Backend"):
+    t.add_column("Model file", overflow="fold")
+    for col in ("Size", "Prompt", "Generate", "Peak RAM", "Backend"):
         t.add_column(col)
     for r in results:
-        t.add_row(r.model_file, f"{r.size_gb:.2f} GB",
-                  f"{r.prompt_tokens_per_s} tok/s" if r.prompt_tokens_per_s else "—",
-                  f"{r.gen_tokens_per_s} tok/s" if r.gen_tokens_per_s else "—",
-                  f"{r.peak_rss_gb} GB" if r.peak_rss_gb else "—", r.backend or "—")
+        t.add_row(Path(r.model_file).name, _fmt_gb(r.size_gb),
+                  f"{r.prompt_tokens_per_s:g} tok/s" if r.prompt_tokens_per_s else "—",
+                  f"{r.gen_tokens_per_s:g} tok/s" if r.gen_tokens_per_s else "—",
+                  _fmt_gb(r.peak_rss_gb), r.backend or "—")
     return t
 

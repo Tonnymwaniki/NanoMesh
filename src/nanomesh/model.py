@@ -68,6 +68,62 @@ def read_safetensors_header(path: Path) -> dict:
         return json.loads(f.read(length))
 
 
+GGUF_SCALARS = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f", 7: "<?", 10: "<Q", 11: "<q", 12: "<d"}
+
+
+def read_gguf(path: Path) -> tuple[dict, int]:
+    """Return (metadata, total parameter count) from a GGUF file's header."""
+    with path.open("rb") as f:
+        def unpack(fmt):
+            return struct.unpack(fmt, f.read(struct.calcsize(fmt)))[0]
+
+        def string():
+            return f.read(unpack("<Q")).decode("utf-8", errors="replace")
+
+        def value(vtype):
+            if vtype == 8:
+                return string()
+            if vtype == 9:
+                item_type, count = unpack("<I"), unpack("<Q")
+                if item_type in GGUF_SCALARS and item_type != 8:
+                    f.seek(struct.calcsize(GGUF_SCALARS[item_type]) * count, 1)  # skip big arrays
+                    return None
+                return [value(item_type) for _ in range(count)]
+            return unpack(GGUF_SCALARS[vtype])
+
+        if f.read(4) != b"GGUF":
+            raise ValueError(f"{path.name} is not a GGUF file")
+        unpack("<I")  # version
+        n_tensors, n_kv = unpack("<Q"), unpack("<Q")
+        meta = {}
+        for _ in range(n_kv):
+            key = string()
+            v = value(unpack("<I"))
+            if not isinstance(v, list):  # token lists etc. aren't needed
+                meta[key] = v
+        params = 0
+        for _ in range(n_tensors):
+            string()
+            dims = [unpack("<Q") for _ in range(unpack("<I"))]
+            unpack("<I"), unpack("<Q")  # type, offset
+            params += prod(dims)
+    return meta, params
+
+
+def _analyze_gguf(path: Path) -> ModelInfo:
+    meta, params = read_gguf(path)
+    arch = meta.get("general.architecture", "")
+    heads = meta.get(f"{arch}.attention.head_count")
+    hidden = meta.get(f"{arch}.embedding_length")
+    return ModelInfo(
+        name=meta.get("general.name") or path.stem, source="gguf", params=params, architecture=arch or None,
+        num_layers=meta.get(f"{arch}.block_count"), hidden_size=hidden, num_attention_heads=heads,
+        num_kv_heads=meta.get(f"{arch}.attention.head_count_kv", heads),
+        head_dim=meta.get(f"{arch}.attention.key_length") or (hidden // heads if hidden and heads else None),
+        max_context=meta.get(f"{arch}.context_length"), disk_bytes=path.stat().st_size,
+    )
+
+
 def _count_safetensors(files: list[Path]) -> tuple[int, str | None]:
     params = 0
     dtypes: dict[str, int] = {}
@@ -114,10 +170,7 @@ def analyze(spec: str) -> ModelInfo:
     if path.is_dir():
         return _analyze_dir(path)
     if path.is_file() and path.suffix == ".gguf":
-        # Without parsing the GGUF tensor table we estimate params from file size
-        # assuming ~4.85 bits/weight; good enough for planning.
-        size = path.stat().st_size
-        return ModelInfo(name=path.stem, source="gguf", params=int(size * 8 / 4.85), disk_bytes=size)
+        return _analyze_gguf(path)
     if path.is_file() and path.suffix == ".safetensors":
         params, dtype = _count_safetensors([path])
         return ModelInfo(name=path.stem, source="safetensors", params=params,

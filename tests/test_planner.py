@@ -49,3 +49,11 @@ def test_pareto_excludes_dominated_variants():
 def test_device_search():
     assert get_device("thinkpad").id == "lenovo-thinkpad-t480"
     assert {d.id for d in search_devices("android")} >= {"redmi-14c-4gb", "low-end-android-4gb"}
+
+
+def test_tiny_model_prefers_int8_over_fp16_despite_rounding():
+    # Both variants round to the same GB figure; INT8 must still win.
+    p = plan(analyze("500m"), get_device("h100-sxm-80gb"))
+    assert p.recommended == "Q8_0"
+    p = plan(analyze("1m"), get_device("raspberry-pi-5-8gb"))
+    assert p.recommended == "Q8_0"

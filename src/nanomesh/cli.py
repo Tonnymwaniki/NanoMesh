@@ -215,7 +215,8 @@ def _package_readme(p: Plan, formats: list[str], results) -> str:
     if results:
         lines += ["", "## Measured", "", "| File | Generate | Peak RAM |", "|---|---|---|"]
         for r in results:
-            lines.append(f"| `{Path(r.model_file).name}` | {r.gen_tokens_per_s} tok/s | {r.peak_rss_gb} GB |")
+            ram = f"{r.peak_rss_gb:.2f} GB" if r.peak_rss_gb is not None else "—"
+            lines.append(f"| `{Path(r.model_file).name}` | {r.gen_tokens_per_s} tok/s | {ram} |")
     lines += ["", "## Run", "", "```sh", f"llama-cli -m model-{formats[0]}.gguf -c {p.requirements.context}", "```", "",
               "Estimates come from `plan.json`; see `benchmark.json` for measurements when present.", ""]
     return "\n".join(lines)
