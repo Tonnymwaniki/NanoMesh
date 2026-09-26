@@ -6,7 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from nanomesh.hardware import GB, DeviceProfile
-from nanomesh.model import analyze, read_gguf
+from nanomesh.model import analyze, gguf_size, read_gguf
 from nanomesh.planner import FORMATS, memory_budgets
 from nanomesh.results import Result, gguf_format, now
 from nanomesh.toolchain import Toolchain, benchmark_gguf, measure_perplexity
@@ -20,7 +20,7 @@ def pick_reference(files: list[Path], device: DeviceProfile) -> Path | None:
     so a reference larger than RAM would thrash rather than fail)."""
     budget = max(b.memory_gb for b in memory_budgets(device)) * GB
     ranked = sorted(files, key=lambda f: REFERENCE_ORDER.index(fmt) if (fmt := _format(f)) in REFERENCE_ORDER else 99)
-    return next((f for f in ranked if f.stat().st_size < budget), None)
+    return next((f for f in ranked if gguf_size(f) < budget), None)
 
 
 def _format(path: Path) -> str | None:

@@ -110,8 +110,39 @@ def read_gguf(path: Path) -> tuple[dict, int]:
     return meta, params
 
 
+SPLIT_RE = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$")
+
+
+def gguf_parts(path: Path) -> list[Path]:
+    """All files of a split GGUF (model-00001-of-00003.gguf, ...), or just [path].
+
+    llama.cpp loads a split model from its first part and finds the rest itself.
+    """
+    m = SPLIT_RE.search(path.name)
+    if not m:
+        return [path]
+    stem = path.name[: m.start()]
+    total = int(m.group(2))
+    return [path.with_name(f"{stem}-{i:05d}-of-{total:05d}.gguf") for i in range(1, total + 1)]
+
+
+def is_later_split_part(path: Path) -> bool:
+    m = SPLIT_RE.search(path.name)
+    return bool(m) and int(m.group(1)) > 1
+
+
+def gguf_size(path: Path) -> int:
+    """Bytes on disk, summed across the parts of a split GGUF."""
+    return sum(p.stat().st_size for p in gguf_parts(path) if p.exists())
+
+
 def _analyze_gguf(path: Path) -> ModelInfo:
-    meta, params = read_gguf(path)
+    parts = gguf_parts(path)
+    missing = [p.name for p in parts if not p.exists()]
+    if missing:
+        raise ValueError(f"Split model is missing part(s): {', '.join(missing)}")
+    meta, params = read_gguf(parts[0])
+    params += sum(read_gguf(p)[1] for p in parts[1:])
     arch = meta.get("general.architecture", "")
     heads = meta.get(f"{arch}.attention.head_count")
     hidden = meta.get(f"{arch}.embedding_length")
@@ -120,7 +151,7 @@ def _analyze_gguf(path: Path) -> ModelInfo:
         num_layers=meta.get(f"{arch}.block_count"), hidden_size=hidden, num_attention_heads=heads,
         num_kv_heads=meta.get(f"{arch}.attention.head_count_kv", heads),
         head_dim=meta.get(f"{arch}.attention.key_length") or (hidden // heads if hidden and heads else None),
-        max_context=meta.get(f"{arch}.context_length"), disk_bytes=path.stat().st_size,
+        max_context=meta.get(f"{arch}.context_length"), disk_bytes=gguf_size(path),
     )
 
 
@@ -170,7 +201,8 @@ def analyze(spec: str) -> ModelInfo:
     if path.is_dir():
         return _analyze_dir(path)
     if path.is_file() and path.suffix == ".gguf":
-        return _analyze_gguf(path)
+        first = gguf_parts(path)[0]  # any part of a split model means the whole model
+        return _analyze_gguf(first)
     if path.is_file() and path.suffix == ".safetensors":
         params, dtype = _count_safetensors([path])
         return ModelInfo(name=path.stem, source="safetensors", params=params,

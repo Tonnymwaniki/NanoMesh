@@ -10,7 +10,7 @@ from rich.console import Console
 from nanomesh import __version__
 from nanomesh.devices import get_device, load_devices, recognise, search_devices
 from nanomesh.hardware import DeviceProfile, scan_device
-from nanomesh.model import analyze
+from nanomesh.model import analyze, gguf_parts, gguf_size
 from nanomesh.planner import FORMATS_BY_NAME, QUALITY_TIERS, Plan, Requirements, free_ram_warning, plan
 from nanomesh import results as store
 from nanomesh.evaluate import evaluate
@@ -283,6 +283,13 @@ def benchmark(
     if not files or not all(f.is_file() and f.suffix == ".gguf" for f in files):
         console.print(f"[red]No .gguf files found at {path}")
         raise typer.Exit(1)
+    # A split model (x-00001-of-00002.gguf, ...) is one model: benchmark it via its first part.
+    files = sorted({gguf_parts(f)[0] for f in files})
+    for f in files:
+        missing = [p.name for p in gguf_parts(f) if not p.exists()]
+        if missing:
+            console.print(f"[red]{f.name} is part of a split model, but these parts are missing: {', '.join(missing)}")
+            raise typer.Exit(1)
     tc = find_toolchain()
     if not tc.bench:
         console.print("[red]llama-bench not found. Install llama.cpp and set NANOMESH_LLAMA_CPP.")
@@ -296,7 +303,7 @@ def benchmark(
     if reference and reference not in files:
         files.append(reference)
     device = _resolve_device("local")
-    largest = max(f.stat().st_size for f in files) / 1024**3
+    largest = max(gguf_size(f) for f in files) / 1024**3
     if warning := free_ram_warning(device, largest + 0.3):
         console.print(f"[yellow]⚠ {warning}")
     results = _evaluate(tc, files, device, quality, reference, eval_text, threads)

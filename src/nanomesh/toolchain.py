@@ -90,7 +90,9 @@ class BenchResult(BaseModel):
 
 def parse_llama_bench(output: str, model_file: Path) -> BenchResult:
     rows = json.loads(output)
-    res = BenchResult(model_file=str(model_file), size_gb=round(model_file.stat().st_size / 1024**3, 4))
+    from nanomesh.model import gguf_size
+
+    res = BenchResult(model_file=str(model_file), size_gb=round(gguf_size(model_file) / 1024**3, 4))
     for row in rows:
         speed = row.get("avg_ts")
         if row.get("n_gen", 0) > 0 and row.get("n_prompt", 0) == 0:

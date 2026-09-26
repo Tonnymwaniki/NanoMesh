@@ -133,3 +133,36 @@ def test_redirected_output_survives_a_legacy_windows_encoding(tmp_path):
                          capture_output=True, env=env)
     assert out.returncode == 0, out.stderr.decode("utf-8", "replace")
     assert "🏆" in out.stdout.decode("utf-8")
+
+
+def test_benchmark_treats_split_gguf_as_one_model(tmp_path, monkeypatch):
+    import sys
+
+    import pytest
+
+    if sys.platform == "win32":
+        pytest.skip("fake llama.cpp binaries are POSIX scripts")
+    from conftest import write_gguf
+
+    from nanomesh.model import analyze
+
+    monkeypatch.setenv("NANOMESH_LLAMA_CPP", _fake_llama_cpp(tmp_path))
+    models = tmp_path / "qwen7b"
+    models.mkdir()
+    write_gguf(models / "qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf", file_type=15)
+    write_gguf(models / "qwen2.5-7b-instruct-q4_k_m-00002-of-00002.gguf", file_type=15,
+               tensors=(("blk.1.attn_q.weight", [64, 64]),))
+
+    # Either part stands for the whole model.
+    whole = analyze(str(models / "qwen2.5-7b-instruct-q4_k_m-00002-of-00002.gguf"))
+    assert whole.params == 64 * 100 + 64 * 64 * 2
+
+    result = runner.invoke(app, ["benchmark", str(models), "--no-quality"])
+    assert result.exit_code == 0, result.output
+    rows = json.loads(runner.invoke(app, ["results", "--json"]).output)
+    assert len(rows) == 1
+    assert rows[0]["model_params"] == whole.params
+
+    (models / "qwen2.5-7b-instruct-q4_k_m-00002-of-00002.gguf").unlink()
+    missing = runner.invoke(app, ["benchmark", str(models), "--no-quality"])
+    assert missing.exit_code == 1 and "missing" in missing.output
