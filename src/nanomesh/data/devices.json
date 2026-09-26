@@ -34,6 +34,40 @@
     "notes": "Common configuration: 8 GB DDR4-2133 dual-channel."
   },
   {
+    "id": "hp-elitebook-840-g6",
+    "name": "HP EliteBook 840 G6",
+    "kind": "laptop",
+    "arch": "x86_64",
+    "cpu": "Intel Core i5-8365U",
+    "physical_cores": 4,
+    "logical_cores": 8,
+    "cpu_flags": [
+      "sse4_2",
+      "avx",
+      "avx2",
+      "fma",
+      "f16c"
+    ],
+    "ram_gb": 8,
+    "memory_bandwidth_gbps": 38.4,
+    "gpus": [
+      {
+        "name": "Intel UHD Graphics 620",
+        "vendor": "Intel",
+        "unified_memory": true
+      }
+    ],
+    "match": [
+      "hp elitebook 840 g6"
+    ],
+    "runtimes": [
+      "llama.cpp (CPU)",
+      "onnxruntime (CPU)",
+      "OpenVINO"
+    ],
+    "notes": "DDR4-2400 dual-channel; shipped with 8, 16 or 32 GB."
+  },
+  {
     "id": "lenovo-thinkpad-t480",
     "name": "Lenovo ThinkPad T480",
     "kind": "laptop",

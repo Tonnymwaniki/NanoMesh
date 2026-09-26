@@ -80,8 +80,27 @@ def test_android_identity(monkeypatch):
     assert hardware._device_kind() == "phone"
 
 
-def test_live_phone_budget_respects_both_limits():
-    phone = DeviceProfile(name="p", arch="aarch64", kind="phone", is_local=True, ram_gb=8, available_ram_gb=6)
+def test_budget_uses_total_ram_not_momentary_free_ram():
+    # Real case: a 16 GB EliteBook 840 G6 with a browser open had 1.9 GB free.
+    laptop = recognise(_local("HP", "HP EliteBook 840 G6", ram_gb=15.8, kind="laptop", available_ram_gb=1.9))
+    assert laptop.matched_id == "hp-elitebook-840-g6"
+    assert memory_budgets(laptop)[-1].memory_gb == pytest.approx(15.8 * 0.70)
+    phone = DeviceProfile(name="p", arch="aarch64", kind="phone", is_local=True, ram_gb=8, available_ram_gb=2)
     assert memory_budgets(phone)[-1].memory_gb == pytest.approx(8 * 0.45)
-    busy = phone.model_copy(update={"available_ram_gb": 2})
-    assert memory_budgets(busy)[-1].memory_gb == pytest.approx(2 * 0.85)
+
+
+def test_low_free_ram_warns_instead_of_shrinking_the_plan():
+    from nanomesh.model import analyze
+    from nanomesh.planner import plan
+
+    laptop = recognise(_local("HP", "HP EliteBook 840 G6", ram_gb=15.8, kind="laptop", available_ram_gb=1.9))
+    p = plan(analyze("qwen2.5-3b"), laptop)
+    assert p.recommended == "Q8_0"
+    assert any("Only 1.9 GB of RAM is free" in a for a in p.advice)
+    roomy = laptop.model_copy(update={"available_ram_gb": 12.0})
+    assert not any("free right now" in a for a in plan(analyze("qwen2.5-3b"), roomy).advice)
+
+
+def test_windows_arch_is_normalised():
+    assert hardware._normalize_arch("AMD64") == "x86_64"
+    assert hardware._normalize_arch("aarch64") == "aarch64"

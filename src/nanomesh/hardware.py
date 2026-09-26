@@ -244,6 +244,11 @@ def _detect_runtimes(gpus: list[GPU]) -> list[str]:
     return runtimes
 
 
+def _normalize_arch(machine: str) -> str:
+    # Windows reports x86-64 as "AMD64" even on Intel CPUs.
+    return {"amd64": "x86_64", "x64": "x86_64", "arm64": "arm64", "aarch64": "aarch64"}.get(machine.lower(), machine)
+
+
 def scan_device() -> DeviceProfile:
     """Profile the current machine."""
     mem = psutil.virtual_memory()
@@ -266,7 +271,7 @@ def scan_device() -> DeviceProfile:
         vendor=vendor,
         model=model,
         os="Android" if is_android() else f"{platform.system()} {platform.release()}",
-        arch=platform.machine(),
+        arch=_normalize_arch(platform.machine()),
         cpu=_cpu_name(),
         physical_cores=psutil.cpu_count(logical=False),
         logical_cores=psutil.cpu_count(logical=True),
@@ -286,7 +291,7 @@ def compute_class(device: DeviceProfile) -> str:
         return "Datacenter GPU"
     if gpu and gpu.vram_gb and gpu.vram_gb >= 8:
         return "Workstation GPU"
-    budget = device.available_ram_gb or device.ram_gb
+    budget = device.ram_gb
     if budget >= 24:
         return "High-memory CPU"
     if budget >= 10:

@@ -124,15 +124,10 @@ def memory_budgets(device: DeviceProfile, max_ram_gb: float | None = None) -> li
                               bandwidth_gbps=gpu.bandwidth_gbps, efficiency=GPU_BANDWIDTH_EFFICIENCY))
 
     unified = next((g for g in device.gpus if g.unified_memory and g.vram_gb and g.bandwidth_gbps), None)
-    if device.kind == "phone":
-        # Android kills apps well before RAM is exhausted.
-        cpu_mem = device.ram_gb * 0.45
-    else:
-        cpu_mem = device.ram_gb * 0.70
-    if device.is_local and device.available_ram_gb:
-        # A live scan knows what's actually free right now.
-        free = device.available_ram_gb * 0.85
-        cpu_mem = min(cpu_mem, free) if device.kind == "phone" else free
+    # Budgets come from total RAM, not what happens to be free right now: free
+    # memory swings with every open browser tab. `free_ram_warning` covers that.
+    # Android kills apps well before RAM is exhausted, hence the lower share.
+    cpu_mem = device.ram_gb * (0.45 if device.kind == "phone" else 0.70)
     if max_ram_gb is not None:
         cpu_mem = min(cpu_mem, max_ram_gb)
         budgets = [b.model_copy(update={"memory_gb": min(b.memory_gb, max_ram_gb)}) for b in budgets]
@@ -219,7 +214,7 @@ def plan(model: ModelInfo, device: DeviceProfile, req: Requirements | None = Non
     max_b = max_practical_params(max(b.memory_gb for b in budgets), req.context)
     return Plan(model=model, device=device, requirements=req, budgets=budgets, variants=variants,
                 recommended=best.format.name if best else None, max_practical_params_b=max_b,
-                advice=_advice(model, variants, best, max_b, req))
+                advice=_advice(model, device, variants, best, max_b, req))
 
 
 def _choose(ok: list[Variant], prefer: str) -> Variant | None:
@@ -249,7 +244,15 @@ def _mark_pareto(variants: list[Variant]) -> None:
         )
 
 
-def _advice(model: ModelInfo, variants: list[Variant], best: Variant | None,
+def free_ram_warning(device: DeviceProfile, needed_gb: float) -> str | None:
+    """On a live scan, flag when the model needs more RAM than is free right now."""
+    if not device.is_local or device.available_ram_gb is None or device.available_ram_gb >= needed_gb:
+        return None
+    return (f"Only {device.available_ram_gb:g} GB of RAM is free right now and this needs ~{needed_gb:.1f} GB: "
+            "close other apps (especially browsers) first, or it will run slowly from swap.")
+
+
+def _advice(model: ModelInfo, device: DeviceProfile, variants: list[Variant], best: Variant | None,
             max_b: float, req: Requirements) -> list[str]:
     advice = []
     if best is None:
@@ -273,6 +276,8 @@ def _advice(model: ModelInfo, variants: list[Variant], best: Variant | None,
         )
     if not best.comfortable:
         advice.append("This variant barely fits; close other apps or reduce --context.")
+    if warning := free_ram_warning(device, best.total_memory_gb):
+        advice.append(warning)
     if best.tokens_per_s is not None and best.tokens_per_s < 5:
         advice.append("Expected speed is below ~5 tok/s, which feels sluggish for chat.")
     if best.tokens_per_s is None:

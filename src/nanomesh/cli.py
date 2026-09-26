@@ -10,7 +10,7 @@ from nanomesh import __version__
 from nanomesh.devices import get_device, load_devices, recognise, search_devices
 from nanomesh.hardware import DeviceProfile, scan_device
 from nanomesh.model import analyze
-from nanomesh.planner import FORMATS_BY_NAME, QUALITY_TIERS, Plan, Requirements, plan
+from nanomesh.planner import FORMATS_BY_NAME, QUALITY_TIERS, Plan, Requirements, free_ram_warning, plan
 from nanomesh import results as store
 from nanomesh.evaluate import evaluate
 from nanomesh.report import bench_table, device_passport, model_summary, plan_view, results_table
@@ -287,6 +287,9 @@ def benchmark(
     if reference and reference not in files:
         files.append(reference)
     device = _resolve_device("local")
+    largest = max(f.stat().st_size for f in files) / 1024**3
+    if warning := free_ram_warning(device, largest + 0.3):
+        console.print(f"[yellow]⚠ {warning}")
     results = _evaluate(tc, files, device, quality, reference, eval_text, threads)
     console.print(bench_table(results))
     if save:

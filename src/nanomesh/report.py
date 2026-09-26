@@ -83,6 +83,12 @@ def device_passport(device: DeviceProfile) -> Panel:
             sizes.add_row(size.upper(), Text("won't fit", style="red"), "", "", "")
 
     notes = Text(f"\n{device.notes}", style="dim") if device.notes else Text("")
+    if device.is_local and device.available_ram_gb is not None and device.available_ram_gb < budget * 0.5:
+        notes.append(f"\n⚠ Only {device.available_ram_gb:g} GB of RAM is free right now. The table assumes "
+                     "you close other apps (especially browsers) before running a model.", style="yellow")
+    if device.is_local and not device.matched_id:
+        notes.append("\nThis exact model isn't in the NanoMesh database yet, so speeds are unknown until you run "
+                     "`nanomesh benchmark`.", style="dim")
     return Panel(Group(spec, fit, sizes, notes), title=f"[bold]DEVICE PASSPORT · {device.name}",
                  subtitle="speeds are bandwidth-based estimates", border_style="magenta")
 
