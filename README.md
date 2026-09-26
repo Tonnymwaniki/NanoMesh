@@ -93,7 +93,7 @@ Requirements you can set:
 | `--min-quality` | A percentage like `95`, or a tier: `lossless`, `high`, `good` (default), `fair`, `severe` |
 | `--min-speed N` | Minimum generation speed in tokens/s |
 | `--ram N` | Cap the memory the model may use, in GB |
-| `--prefer` | Tie-break among valid variants: `quality` (default), `speed`, `size` |
+| `--prefer` | `balanced` (default: best quality that still reaches ~5 tok/s, else the fastest), `quality`, `speed`, `size` |
 
 `plan` exits with status 2 when no variant meets the requirements, so it can gate CI.
 
@@ -132,8 +132,9 @@ Results are appended to `~/.nanomesh/results.jsonl` (override with `NANOMESH_HOM
 from then on `plan` uses them:
 
 - **✓ measured**: the exact speed/quality of variants you benchmarked
-- **\* calibrated**: other variants and models on the same device, using the memory
-  bandwidth your benchmarks showed the device actually delivers
+- **\* calibrated**: other variants and models on the same device, using the roofline
+  your benchmarks revealed (the memory bandwidth the device actually delivers, and the
+  CPU's ceiling for unpacking low-bit weights), and this model's measured quality loss
 - **~ estimate**: nothing measured yet
 
 ## How the estimates work
@@ -143,12 +144,16 @@ from then on `plan` uses them:
 - **Budget** = 92% of VRAM on a discrete GPU; 45% of RAM on phones (Android kills apps early);
   70% of RAM elsewhere; 85% of *free* RAM for the local machine. Variants using more than 90%
   of the budget are only chosen when nothing else fits.
-- **Speed**: token generation is memory-bandwidth bound, so
-  tok/s ≈ bandwidth × efficiency ÷ bytes read per token. Devices without bandwidth data show `—`
-  until you run `nanomesh benchmark` on them, which calibrates the device.
+- **Speed**: token generation is usually memory-bandwidth bound, so
+  tok/s ≈ bandwidth × efficiency ÷ bytes read per token. On weak CPUs, low-bit formats hit a
+  compute ceiling instead: on an HP EliteBook 840 G6, Qwen2.5-1.5B ran at 15 tok/s at both INT4
+  and INT3. After a benchmark, speeds are min(bandwidth ÷ bytes, compute ceiling ÷ params),
+  both learned from the device's runs.
 - **Quality** is reference perplexity ÷ variant perplexity, as a percentage. Before measuring,
   each format uses a conservative typical value from llama.cpp's published perplexity deltas;
   tiers are derived from it (lossless ≥ 99.8%, high ≥ 98.5%, good ≥ 96%, fair ≥ 90%).
+  Small models lose much more: Qwen2.5-1.5B kept 92.5% at INT4 and 78.5% at INT3, about 3×
+  the typical loss. Once some variants are measured, the rest are scaled by that factor.
 
 Treat estimates as a way to narrow the search; `benchmark` is the ground truth.
 
@@ -158,7 +163,8 @@ Treat estimates as a way to narrow the search; `benchmark` is the ground truth.
 - [x] Device database, planner with Pareto selection, GGUF build + llama-bench measurement
 - [x] Exact device recognition (Windows, Linux, macOS, Android) matched to the database
 - [x] Quality measurement (perplexity vs reference), local results store, per-device calibration
-- [ ] Validate and tune estimates on real hardware (first: HP EliteBook 840 G3)
+- [x] First real-hardware validation (HP EliteBook 840 G6): roofline speed model and
+      per-model quality calibration came out of it
 - [ ] ONNX / OpenVINO / LiteRT export; AWQ/GPTQ; vision models
 - [ ] Shared benchmark database: upload `results.jsonl` so every user of a device benefits
 - [ ] Android on-device benchmarking, NPU profiles

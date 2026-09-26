@@ -34,7 +34,8 @@ def params_str(params: int) -> str:
 
 
 def _fmt_quality(v: Variant) -> Text:
-    pct = f"{v.quality_pct:g}% ✓" if v.quality_measured else f"~{v.quality_pct:g}%"
+    pct = {"measured": f"{v.quality_pct:g}% ✓", "calibrated": f"{v.quality_pct:g}% *"}.get(
+        v.quality_source, f"~{v.quality_pct:g}%")
     return Text(f"{v.quality} {pct}", style=QUALITY_STYLE[v.quality])
 
 

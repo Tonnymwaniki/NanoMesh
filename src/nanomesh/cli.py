@@ -52,8 +52,8 @@ def _requirements(context, min_quality, min_speed, ram, prefer) -> Requirements:
     if pct is not None:
         return Requirements(context=context, min_quality_pct=pct, min_tokens_per_s=min_speed,
                             max_ram_gb=ram, prefer=prefer)
-    if prefer not in ("quality", "speed", "size"):
-        console.print("[red]--prefer must be one of: quality, speed, size")
+    if prefer not in ("balanced", "quality", "speed", "size"):
+        console.print("[red]--prefer must be one of: balanced, quality, speed, size")
         raise typer.Exit(1)
     return Requirements(context=context, min_quality=min_quality, min_tokens_per_s=min_speed,
                         max_ram_gb=ram, prefer=prefer)
@@ -116,7 +116,7 @@ def plan_cmd(
     min_quality: str = QualityOpt,
     min_speed: float = typer.Option(None, help="Minimum generation speed in tokens/s."),
     ram: float = typer.Option(None, help="Cap the memory the model may use, in GB."),
-    prefer: str = typer.Option("quality", help="Tie-breaker among valid variants: quality, speed, size."),
+    prefer: str = typer.Option("balanced", help="balanced (best quality at a usable speed), quality, speed or size."),
     as_json: bool = typer.Option(False, "--json", help="Print the plan as JSON."),
 ):
     """Recommend the best variant of a model for a device, using measurements where available."""
@@ -166,7 +166,7 @@ def optimize(
     min_quality: str = QualityOpt,
     min_speed: float = typer.Option(None),
     ram: float = typer.Option(None),
-    prefer: str = typer.Option("quality"),
+    prefer: str = typer.Option("balanced"),
     dry_run: bool = typer.Option(False, help="Only write the plan and print the conversion commands."),
     bench: bool = typer.Option(True, help="Benchmark built variants (needs llama-bench)."),
     quality: bool = typer.Option(True, help="Measure quality loss vs the original (needs llama-perplexity)."),

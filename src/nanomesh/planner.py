@@ -54,6 +54,8 @@ FORMATS_BY_NAME = {f.name.lower(): f for f in FORMATS} | {f.label.lower(): f for
 RUNTIME_OVERHEAD_BYTES = int(0.3 * GB)  # compute buffers, tokenizer, runtime itself
 # Leave room for the OS/app to breathe: prefer variants using <= 90% of the budget.
 HEADROOM = 0.90
+# Below this, chat feels sluggish; "balanced" trades quality to stay above it.
+USABLE_TOKENS_PER_S = 5.0
 # Fraction of peak bandwidth llama.cpp typically achieves; `benchmark` calibrates per device.
 CPU_BANDWIDTH_EFFICIENCY = 0.55
 GPU_BANDWIDTH_EFFICIENCY = 0.80
@@ -65,7 +67,7 @@ class Requirements(BaseModel):
     min_quality: str = "good"  # a tier name...
     min_quality_pct: float | None = None  # ...or an explicit percentage, which wins
     max_ram_gb: float | None = None
-    prefer: str = "quality"  # quality | speed | size
+    prefer: str = "balanced"  # balanced | quality | speed | size
 
 
 class Budget(BaseModel):
@@ -79,9 +81,17 @@ class Evidence(BaseModel):
     """Measurements for this model on this device (see nanomesh.results)."""
 
     speeds: dict[str, float] = {}  # format -> measured generation tok/s
+    # Parameter count of the files actually benchmarked, which can differ from
+    # the nominal one (e.g. GGUFs that store tied embeddings twice).
+    model_params: int | None = None
     quality: dict[str, float] = {}  # format -> measured quality %
-    # Bandwidth implied by past benchmarks of *any* model on this device.
+    # Device roofline from past benchmarks of *any* model on this device: the
+    # memory bandwidth llama.cpp achieves, and (once a run was held back by the
+    # CPU) how many billion parameters per second it can process.
     effective_bandwidth_gbps: float | None = None
+    compute_gparams_per_s: float | None = None
+    # This model's measured quality loss relative to the typical figures.
+    quality_loss_scale: float | None = None
     calibration_runs: int = 0
 
 
@@ -97,6 +107,7 @@ class Variant(BaseModel):
     quality_pct: float
     quality: str
     quality_measured: bool = False
+    quality_source: str = "typical"  # measured | calibrated | typical
     fits: bool
     comfortable: bool = False  # fits with headroom to spare
     meets_requirements: bool
@@ -158,13 +169,17 @@ def _decode_speed(weights_gb: float, kv_gb: float, effective_gbps: float) -> flo
 
 
 def _speed(fmt: QuantFormat, weights: float, kv: float, budget: Budget, primary: bool,
-           ev: Evidence) -> tuple[float | None, str | None]:
+           ev: Evidence, params: int) -> tuple[float | None, str | None]:
     # Benchmarks run on the device's preferred placement, so measurements and
     # calibration only apply to variants that land there too.
     if primary and fmt.name in ev.speeds:
         return ev.speeds[fmt.name], "measured"
     if primary and ev.effective_bandwidth_gbps:
-        return _decode_speed(weights, kv, ev.effective_bandwidth_gbps), "calibrated"
+        speed = _decode_speed(weights, kv, ev.effective_bandwidth_gbps)
+        if ev.compute_gparams_per_s:
+            # Low-bit formats can outrun the CPU's ability to unpack them.
+            speed = min(speed, round(ev.compute_gparams_per_s / (params / 1e9), 1))
+        return speed, "calibrated"
     if budget.bandwidth_gbps:
         return _decode_speed(weights, kv, budget.bandwidth_gbps * budget.efficiency), "estimate"
     return None, None
@@ -181,6 +196,8 @@ def plan(model: ModelInfo, device: DeviceProfile, req: Requirements | None = Non
          evidence: Evidence | None = None) -> Plan:
     req = req or Requirements()
     ev = evidence or Evidence()
+    if ev.model_params and ev.model_params != model.params:
+        model = model.model_copy(update={"params": ev.model_params})
     budgets = memory_budgets(device, req.max_ram_gb)
     min_pct = req.min_quality_pct if req.min_quality_pct is not None else TIER_FLOORS[req.min_quality]
     fp16_gb = model.params * 2 / GB
@@ -189,14 +206,20 @@ def plan(model: ModelInfo, device: DeviceProfile, req: Requirements | None = Non
     for fmt in FORMATS:
         weights, kv, total = estimate(model, fmt, req.context)
         budget = next((b for b in budgets if total <= b.memory_gb), None)
-        speed, source = _speed(fmt, weights, kv, budget, budget is budgets[0], ev) if budget else (None, None)
+        speed, source = _speed(fmt, weights, kv, budget, budget is budgets[0], ev, model.params) if budget else (None, None)
         measured_q = fmt.name in ev.quality
-        quality_pct = min(ev.quality[fmt.name], 100.0) if measured_q else fmt.typical_quality_pct
+        if measured_q:
+            quality_pct, q_source = min(ev.quality[fmt.name], 100.0), "measured"
+        elif ev.quality_loss_scale is not None and fmt.typical_quality_pct < 100:
+            loss = (100 - fmt.typical_quality_pct) * ev.quality_loss_scale
+            quality_pct, q_source = round(max(0.0, 100 - loss), 1), "calibrated"
+        else:
+            quality_pct, q_source = fmt.typical_quality_pct, "typical"
         reasons = []
         if not budget:
             reasons.append(f"needs ~{total:.1f} GB, budget is {budgets[-1].memory_gb:.1f} GB")
         if quality_pct < min_pct:
-            what = "measured" if measured_q else "typical"
+            what = q_source
             reasons.append(f"{what} quality {quality_pct:g}% below required {min_pct:g}%")
         if req.min_tokens_per_s and speed is not None and speed < req.min_tokens_per_s:
             reasons.append(f"{speed} tok/s below required {req.min_tokens_per_s}")
@@ -205,6 +228,7 @@ def plan(model: ModelInfo, device: DeviceProfile, req: Requirements | None = Non
             total_memory_gb=round(total, 2), compression=round(1 - weights / fp16_gb, 3),
             placement=budget.placement if budget else None, tokens_per_s=speed, speed_source=source,
             quality_pct=quality_pct, quality=tier_for(quality_pct), quality_measured=measured_q,
+            quality_source=q_source,
             fits=budget is not None, comfortable=budget is not None and total <= budget.memory_gb * HEADROOM,
             meets_requirements=not reasons, reasons=reasons,
         ))
@@ -224,12 +248,31 @@ def _choose(ok: list[Variant], prefer: str) -> Variant | None:
         return max(ok, key=lambda v: (v.tokens_per_s or 0, -v.format.bits_per_weight))
     if prefer == "size":
         return min(ok, key=lambda v: v.format.bits_per_weight)
+    if prefer == "balanced":
+        pool = [v for v in ok if v.comfortable] or ok
+        usable = [v for v in pool if v.tokens_per_s is None or v.tokens_per_s >= USABLE_TOKENS_PER_S]
+        if not usable:
+            # Nothing is comfortably fast: take the fastest that meets the quality bar.
+            return max(pool, key=lambda v: (v.tokens_per_s or 0, QUALITY_TIERS.index(v.quality)))
+        ok = usable
     # Highest quality tier first; within a tier the smaller variant wins
     # (so INT8 beats FP16: same quality, half the memory). Variants that only
     # just squeeze in are used only when nothing fits comfortably.
     ok = [v for v in ok if v.comfortable] or ok
     # (Memory grows strictly with bits-per-weight, and unlike rounded GB it never ties.)
     return max(ok, key=lambda v: (QUALITY_TIERS.index(v.quality), -v.format.bits_per_weight))
+
+
+def _no_faster_advice(variants: list[Variant]) -> list[str]:
+    """Flag low-bit variants that measured/calibrated no faster than the next
+    step up: on CPU-bound devices they only cost quality."""
+    known = [v for v in variants if v.fits and v.speed_source in ("measured", "calibrated")]
+    slower = [low.format.label for high, low in zip(known, known[1:])
+              if low.tokens_per_s <= high.tokens_per_s * 1.05 and low.quality_pct < high.quality_pct]
+    if not slower:
+        return []
+    return [f"{', '.join(slower)} {'is' if len(slower) == 1 else 'are'} no faster than the next step up on "
+            "this device (the CPU, not memory, is the limit), so going lower only costs quality."]
 
 
 def _mark_pareto(variants: list[Variant]) -> None:
@@ -282,6 +325,7 @@ def _advice(model: ModelInfo, device: DeviceProfile, variants: list[Variant], be
         advice.append("Expected speed is below ~5 tok/s, which feels sluggish for chat.")
     if best.tokens_per_s is None:
         advice.append("No bandwidth data for this device; run `nanomesh benchmark` on it for real speeds.")
-    if not best.quality_measured:
+    if best.quality_source == "typical":
         advice.append("Quality is a typical figure for this format; `nanomesh benchmark` measures it.")
+    advice += _no_faster_advice(variants)
     return advice

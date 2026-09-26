@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from nanomesh import __version__
 from nanomesh.hardware import DeviceProfile
 from nanomesh.model import ModelInfo
-from nanomesh.planner import Evidence
+from nanomesh.planner import FORMATS_BY_NAME, Evidence
 
 # llama.cpp's llama_ftype values for the formats NanoMesh builds.
 GGUF_FILE_TYPES = {0: "F32", 1: "F16", 7: "Q8_0", 10: "Q2_K", 12: "Q3_K_M", 15: "Q4_K_M",
@@ -27,6 +27,7 @@ GGUF_FILE_TYPES = {0: "F32", 1: "F16", 7: "Q8_0", 10: "Q2_K", 12: "Q3_K_M", 15: 
 # Params may differ slightly between a safetensors model and its GGUF
 # conversion (tied embeddings, etc.), so match within a tolerance.
 PARAMS_TOLERANCE = 0.03
+GIB_TO_GB = 1024**3 / 1e9
 
 
 class Result(BaseModel):
@@ -91,27 +92,71 @@ def load() -> list[Result]:
     return out
 
 
+def _slug(name: str) -> str:
+    return re.sub(r"[\s_/]+", "-", name.lower()).strip("-")
+
+
 def _same_model(r: Result, model: ModelInfo) -> bool:
+    """Same model family and size, even if the parameter counts disagree.
+
+    GGUF conversions often store tied embeddings twice (Qwen2.5-1.5B: 1.54B
+    params on Hugging Face, 1.78B in the official GGUF), so names are matched
+    first: "qwen2.5-1.5b" matches "Qwen2.5 1.5B Instruct" at a word boundary.
+    """
+    a, b = _slug(r.model_name), _slug(model.name)
+    shorter, longer = sorted((a, b), key=len)
+    if shorter and longer.startswith(shorter) and longer[len(shorter):len(shorter) + 1] in ("", "-"):
+        return abs(r.model_params - model.params) <= model.params * 0.25
     return abs(r.model_params - model.params) <= model.params * PARAMS_TOLERANCE
+
+
+# A run delivering under this share of the device's best bandwidth was held
+# back by something else: the CPU unpacking low-bit weights.
+COMPUTE_BOUND_BELOW = 0.90
+# Near-lossless formats' measured loss is mostly noise; don't calibrate from them.
+MIN_TYPICAL_LOSS = 1.0
 
 
 def evidence(device: DeviceProfile, model: ModelInfo, results: list[Result] | None = None) -> Evidence:
     """Collect what's been measured on this device, for this model and overall."""
     results = [r for r in (load() if results is None else results) if r.device_key == device.key]
-    speeds, quality = {}, {}
+    speeds, quality, params = {}, {}, None
     for r in results:  # later results overwrite earlier ones
         if r.format and _same_model(r, model):
+            params = r.model_params
             if r.gen_tokens_per_s:
                 speeds[r.format] = r.gen_tokens_per_s
             if r.quality_pct is not None:
                 quality[r.format] = r.quality_pct
-    # Generation streams the whole model once per token, so tok/s x model size
-    # is the bandwidth this device actually delivers to llama.cpp.
-    implied = [r.gen_tokens_per_s * r.file_size_gb * (1024**3 / 1e9)
-               for r in results if r.gen_tokens_per_s and r.file_size_gb >= 0.05]
-    return Evidence(speeds=speeds, quality=quality,
-                    effective_bandwidth_gbps=round(median(implied), 1) if implied else None,
-                    calibration_runs=len(implied))
+
+    # Roofline calibration. Generating a token streams the whole model through
+    # memory once, so tok/s x file size is the bandwidth a run achieved; the
+    # best run shows what the device can deliver. Runs well below that were
+    # compute-bound, and tok/s x params gives the CPU's throughput ceiling.
+    runs = [(r.gen_tokens_per_s * r.file_size_gb * GIB_TO_GB, r.gen_tokens_per_s * r.model_params / 1e9)
+            for r in results if r.gen_tokens_per_s and r.file_size_gb >= 0.05]
+    bandwidth = max((bw for bw, _ in runs), default=None)
+    compute = max((c for bw, c in runs if bw < bandwidth * COMPUTE_BOUND_BELOW), default=None) if runs else None
+
+    return Evidence(speeds=speeds, quality=quality, model_params=params,
+                    effective_bandwidth_gbps=round(bandwidth, 1) if bandwidth else None,
+                    compute_gparams_per_s=round(compute, 1) if compute else None,
+                    quality_loss_scale=_quality_loss_scale(quality),
+                    calibration_runs=len(runs))
+
+
+def _quality_loss_scale(quality: dict[str, float]) -> float | None:
+    """How much more (or less) quality this model loses than the typical figures.
+
+    Small models lose far more to quantization than the 7B-class models the
+    typical figures come from (Qwen2.5-1.5B lost ~3x at INT4 and INT3).
+    """
+    ratios = []
+    for name, pct in quality.items():
+        fmt = FORMATS_BY_NAME.get(name.lower())
+        if fmt and 100 - fmt.typical_quality_pct >= MIN_TYPICAL_LOSS:
+            ratios.append(max(0.0, 100 - pct) / (100 - fmt.typical_quality_pct))
+    return round(median(ratios), 2) if ratios else None
 
 
 def rows(results: list[Result]) -> list[dict]:

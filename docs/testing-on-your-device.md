@@ -1,7 +1,7 @@
 # Testing NanoMesh on your own device
 
 This walks through validating NanoMesh's estimates on a real machine, using an
-HP EliteBook 840 G3 as the example. Every step works the same on any laptop or
+HP EliteBook 840 G6 as the example. Every step works the same on any laptop or
 desktop; see the Android section for phones.
 
 The goal: compare what `nanomesh plan` *predicts* with what `nanomesh benchmark`
@@ -24,7 +24,7 @@ pip install -e .
 nanomesh scan-device
 ```
 
-It should say **Recognised as `hp-elitebook-840-g3`**. If it doesn't, run
+It should say **Recognised as `hp-elitebook-840-g6`**. If it doesn't, run
 `nanomesh scan-device --json` and send the `vendor` and `model` fields; that's
 how new devices get added to the database.
 
