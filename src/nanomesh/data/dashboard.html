@@ -366,14 +366,16 @@ function sustainedSection(rows) {
     ["Burst → sustained", `${s.burst_tokens_per_s} → ${s.sustained_tokens_per_s} tok/s`],
     ["Slowdown", `${s.drop_pct}%`],
     ["Hottest", r.conditions?.temp_max_c != null ? `${r.conditions.temp_max_c}°C` : "not readable"],
-    ["Battery life", s.battery_hours ? `~${s.battery_hours} h of generation` : r.conditions?.on_battery_any ? "run longer to measure" : "unplug to measure"],
+    ["Battery life", s.battery_hours ? `~${s.battery_hours} h of generation${s.battery_hours_range ? ` (${s.battery_hours_range[0]}–${s.battery_hours_range[1]} h)` : ""}`
+      : r.conditions?.on_battery_any ? "run longer to measure" : "unplug to measure"],
     ["Energy", s.joules_per_token ? `${s.joules_per_token} J per token` : "—"],
   ];
   return h("section", { class: "card", style: "margin-top:16px" },
     h("div", { class: "card-head" }, h("h2", {}, `Sustained load · ${r.model_name} ${r.format}`), h("span", { class: "sub" }, fmt.when(r.timestamp))),
     h("div", { class: "now-grid", style: "grid-template-columns:repeat(auto-fill,minmax(160px,1fr))" }, facts.map(([k, v]) => h("div", { class: "now-item" }, h("small", {}, k), h("b", {}, v)))),
     lineChart(s.points),
-    h("div", { class: "legend" }, "Blue: generation speed (tok/s) · dashed amber: CPU temperature, when the system reports it"));
+    h("div", { class: "legend" }, "Blue: generation speed (tok/s) · dashed amber: CPU temperature, when the system reports it",
+      s.energy_source ? ` · battery figures from the ${s.energy_source}${s.energy_source === "battery %" ? " (rough: 1% steps)" : ""}` : ""));
 }
 
 function threadsSection(rows) {

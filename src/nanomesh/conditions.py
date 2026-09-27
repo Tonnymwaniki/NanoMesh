@@ -37,6 +37,9 @@ class Conditions(BaseModel):
     battery_full_wh: float | None = None  # capacity at full charge today (wear included)
     battery_design_wh: float | None = None
     discharge_w: float | None = None  # battery power draw; only meaningful on battery
+    # Charge left in watt-hours: far finer than the 1% steps of battery_pct, so
+    # its fall over a run gives power draw where no power sensor exists.
+    battery_remaining_wh: float | None = None
     power_plan: str | None = None  # Windows scheme / Linux governor
     power_mode: str | None = None  # Windows 11 power mode / Linux platform profile / macOS Low Power Mode
     cpu_mhz: float | None = None
@@ -116,6 +119,9 @@ def parse_windows_battery(output: str | None) -> dict:
     # Windows reports "unknown" as -2147483648 (0x80000000); real draws are 0-500 W.
     if isinstance(rate, (int, float)) and 0 < rate < 500_000:
         res["discharge_w"] = round(rate / 1000, 2)  # mW
+    remaining = data.get("RemainingCapacity")
+    if isinstance(remaining, (int, float)) and 0 < remaining < 1_000_000:
+        res["battery_remaining_wh"] = round(remaining / 1000, 3)  # mWh
     if data.get("FullChargedCapacity"):
         res["battery_full_wh"] = round(data["FullChargedCapacity"] / 1000, 1)  # mWh
     if data.get("DesignedCapacity"):
@@ -129,7 +135,8 @@ WIN_BATTERY_PS = (
     "$s = Get-CimInstance -Namespace root/wmi -ClassName BatteryStatus -ErrorAction SilentlyContinue | Select-Object -First 1; "
     "$f = Get-CimInstance -Namespace root/wmi -ClassName BatteryFullChargedCapacity -ErrorAction SilentlyContinue | Select-Object -First 1; "
     "$d = Get-CimInstance -Namespace root/wmi -ClassName BatteryStaticData -ErrorAction SilentlyContinue | Select-Object -First 1; "
-    "@{DischargeRate=$s.DischargeRate; FullChargedCapacity=$f.FullChargedCapacity; DesignedCapacity=$d.DesignedCapacity} | ConvertTo-Json"
+    "@{DischargeRate=$s.DischargeRate; RemainingCapacity=$s.RemainingCapacity; FullChargedCapacity=$f.FullChargedCapacity; "
+    "DesignedCapacity=$d.DesignedCapacity} | ConvertTo-Json"
 )
 WIN_TEMP_PS = (
     "$t = Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop | "
@@ -176,6 +183,9 @@ def _linux(c: Conditions) -> None:
             power = num("current_now") * num("voltage_now") / 1e6  # µA * µV -> µW
         if power:
             c.discharge_w = round(power / 1e6, 2)
+        now = num("energy_now")  # µWh
+        if now:
+            c.battery_remaining_wh = round(now / 1e6, 3)
         full, design = num("energy_full"), num("energy_full_design")  # µWh
         if full:
             c.battery_full_wh = round(full / 1e6, 1)
@@ -239,7 +249,8 @@ def read_conditions(slow_parts: bool = True) -> Conditions:
     except Exception:  # noqa: BLE001 - conditions are advisory; never break a scan or benchmark
         pass
     if not c.on_battery:
-        c.discharge_w = None  # a plugged-in laptop's battery draw says nothing about the workload
+        c.discharge_w = None
+        c.battery_remaining_wh = None  # a plugged-in laptop's battery draw says nothing about the workload
     if is_android() and c.on_battery is None:
         c.on_battery = True
     return c
@@ -320,8 +331,9 @@ def advice(c: Conditions, *, busy: bool = False) -> list[str]:
     readings were taken under load (idle CPUs downclock on purpose)."""
     out = []
     if c.on_battery:
-        out.append("Running on battery: laptops usually slow the CPU to save power. Plug in for full speed, "
-                   "and benchmark plugged in so results are comparable.")
+        out.append("Running on battery: many laptops limit turbo boost on battery, so short tasks run slower. "
+                   "Benchmark plugged in so results are comparable; `nanomesh sustained` on both shows what "
+                   "battery really costs on this machine.")
     if c.power_saving:
         mode = c.power_mode or c.power_plan
         out.append(f"Power mode is '{mode}', which caps the CPU. Switch to best performance "

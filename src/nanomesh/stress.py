@@ -56,21 +56,32 @@ def summarize_sustained(points: list[SustainedPoint], full_wh: float | None) -> 
     run.drop_at_s, run.drop_pattern = _drop_shape(points, burst, sustained)
 
     watts = [p.discharge_w for p in points if p.discharge_w]
+    charge = [(p.t_s, p.battery_wh) for p in points if p.battery_wh is not None]
     batt = [p.battery_pct for p in points if p.battery_pct is not None]
     hours = (points[-1].t_s - points[0].t_s) / 3600 if len(points) > 1 else 0
-    if watts:
-        # Direct battery power draw: the most precise energy figure available.
+    if not watts and len(charge) > 1 and charge[-1][0] > charge[0][0] and charge[0][1] > charge[-1][1]:
+        # No power sensor (Windows often reports "unknown"), but the remaining
+        # charge in Wh falls in fine steps: its slope is the power draw.
+        run.watts = round((charge[0][1] - charge[-1][1]) / ((charge[-1][0] - charge[0][0]) / 3600), 2)
+        run.energy_source = "charge counter"
+    elif watts:
         run.watts = round(sum(watts) / len(watts), 2)
+        run.energy_source = "power sensor"
+    if run.watts:
         run.joules_per_token = round(run.watts / sustained, 2) if sustained else None
         if full_wh:
             run.battery_hours = round(full_wh / run.watts, 1)
             if run.joules_per_token:
                 run.tokens_per_battery_pct = round(full_wh * 3600 / 100 / run.joules_per_token)
     elif len(batt) > 1 and hours > 0 and batt[0] - batt[-1] >= 1:
-        # Fall back to the battery percentage falling (1% steps: needs a longer run).
-        pct_per_hour = (batt[0] - batt[-1]) / hours
+        # Last resort: the battery percentage falling. It moves in 1% steps, so
+        # an observed 2% drop could really be anywhere between 1 and 3%.
+        drop = batt[0] - batt[-1]
+        pct_per_hour = drop / hours
         run.battery_hours = round(100 / pct_per_hour, 1)
+        run.battery_hours_range = (round(100 * hours / (drop + 1), 1), round(100 * hours / max(drop - 1, 0.5), 1))
         run.tokens_per_battery_pct = round(sustained * 3600 / pct_per_hour)
+        run.energy_source = "battery %"
     return run
 
 
@@ -94,12 +105,13 @@ def sustained(tc: Toolchain, f: Path, device: DeviceProfile, minutes: float = 3.
         point = SustainedPoint(t_s=round(time.monotonic() - t0, 1), tokens_per_s=round(tok_s or 0, 2),
                                temp_c=max(temps) if temps else end.temp_c,
                                clock_pct=round(median(clocks), 1) if clocks else None,
-                               battery_pct=end.battery_pct, discharge_w=end.discharge_w)
+                               battery_pct=end.battery_pct, discharge_w=end.discharge_w,
+                               battery_wh=end.battery_remaining_wh)
         points.append(point)
         log(point)
         if point.t_s >= minutes * 60:
             break
-    run = summarize_sustained(points, start.battery_full_wh)
+    run = summarize_sustained(points, start.battery_full_wh or end.battery_full_wh)
     return Result(**_identity(f, device), kind="sustained", gen_tokens_per_s=run.burst_tokens_per_s,
                   threads=threads, conditions=summarize(start, readings, points[-1].t_s), sustained=run)
 

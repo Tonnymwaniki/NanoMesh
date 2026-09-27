@@ -20,7 +20,7 @@ from nanomesh import __version__
 from nanomesh.conditions import RunConditions
 from nanomesh.hardware import DeviceProfile
 from nanomesh.model import ModelInfo
-from nanomesh.planner import FORMATS_BY_NAME, Evidence
+from nanomesh.planner import FORMATS_BY_NAME, BatteryCost, Evidence
 
 # llama.cpp's llama_ftype values for the formats NanoMesh builds.
 GGUF_FILE_TYPES = {0: "F32", 1: "F16", 7: "Q8_0", 10: "Q2_K", 12: "Q3_K_M", 15: "Q4_K_M",
@@ -67,6 +67,7 @@ class SustainedPoint(BaseModel):
     clock_pct: float | None = None
     battery_pct: float | None = None
     discharge_w: float | None = None
+    battery_wh: float | None = None
 
 
 class SustainedRun(BaseModel):
@@ -82,6 +83,10 @@ class SustainedRun(BaseModel):
     tokens_per_battery_pct: float | None = None
     drop_at_s: float | None = None  # when speed fell halfway to its sustained level
     drop_pattern: str | None = None  # "step" (turbo budget ran out) or "gradual" (heat)
+    # How the battery figures were measured: "power sensor", "charge counter"
+    # (remaining Wh falling) or "battery %" (1% steps: rough on short runs).
+    energy_source: str | None = None
+    battery_hours_range: tuple[float, float] | None = None
 
 
 def home() -> Path:
@@ -154,6 +159,7 @@ MIN_TYPICAL_LOSS = 1.0
 def evidence(device: DeviceProfile, model: ModelInfo, results: list[Result] | None = None) -> Evidence:
     """Collect what's been measured on this device, for this model and overall."""
     results = [r for r in (load() if results is None else results) if r.device_key == device.key]
+    battery_cost = _battery_cost(results)
     # Laptops slow down on battery, so plugged-in runs are the reference: when
     # both exist, only plugged-in runs count.
     if any(r.on_battery for r in results) and not all(r.on_battery for r in results):
@@ -187,12 +193,28 @@ def evidence(device: DeviceProfile, model: ModelInfo, results: list[Result] | No
     sustained_runs = [r.sustained for r in results if r.kind == "sustained" and r.sustained]
 
     return Evidence(speeds=speeds, quality=quality, model_params=params,
-                    best_threads=threads, best_threads_gain_pct=gain,
+                    best_threads=threads, best_threads_gain_pct=gain, battery_cost=battery_cost,
                     sustained_drop_pct=sustained_runs[-1].drop_pct if sustained_runs else None,
                     effective_bandwidth_gbps=round(bandwidth, 1) if bandwidth else None,
                     compute_gparams_per_s=round(compute, 1) if compute else None,
                     quality_loss_scale=_quality_loss_scale(quality),
                     calibration_runs=len(runs))
+
+
+def _battery_cost(results: list[Result]) -> BatteryCost | None:
+    """Compare the latest sustained runs of one model plugged in vs on battery."""
+    runs = [r for r in results if r.kind == "sustained" and r.sustained and r.conditions
+            and r.conditions.start.on_battery is not None]
+    for model in {(r.model_name, r.format) for r in reversed(runs)}:
+        mine = [r for r in runs if (r.model_name, r.format) == model]
+        plugged = next((r for r in reversed(mine) if not r.on_battery), None)
+        battery = next((r for r in reversed(mine) if r.on_battery), None)
+        if plugged and battery:
+            p, b = plugged.sustained, battery.sustained
+            return BatteryCost(model=f"{model[0]} {model[1]}",
+                               plugged_burst=p.burst_tokens_per_s, plugged_sustained=p.sustained_tokens_per_s,
+                               battery_burst=b.burst_tokens_per_s, battery_sustained=b.sustained_tokens_per_s)
+    return None
 
 
 def _best_threads(results: list[Result], device: DeviceProfile) -> tuple[int | None, float | None]:

@@ -77,6 +77,24 @@ class Budget(BaseModel):
     efficiency: float
 
 
+class BatteryCost(BaseModel):
+    """Sustained runs of one model on this device, plugged in vs on battery."""
+
+    model: str
+    plugged_burst: float
+    plugged_sustained: float
+    battery_burst: float
+    battery_sustained: float
+
+    @property
+    def sustained_loss_pct(self) -> float:
+        return round(max(0.0, 100 * (1 - self.battery_sustained / self.plugged_sustained)), 1)
+
+    @property
+    def burst_loss_pct(self) -> float:
+        return round(max(0.0, 100 * (1 - self.battery_burst / self.plugged_burst)), 1)
+
+
 class Evidence(BaseModel):
     """Measurements for this model on this device (see nanomesh.results)."""
 
@@ -98,6 +116,7 @@ class Evidence(BaseModel):
     best_threads_gain_pct: float | None = None
     # From `nanomesh sustained`: how far speed falls after minutes of generation.
     sustained_drop_pct: float | None = None
+    battery_cost: BatteryCost | None = None
 
 
 class Variant(BaseModel):
@@ -273,6 +292,14 @@ def _tuning_advice(ev: Evidence) -> list[str]:
     if ev.best_threads and ev.best_threads_gain_pct and ev.best_threads_gain_pct >= 5:
         out.append(f"Run with {ev.best_threads} threads (llama.cpp: -t {ev.best_threads}): measured "
                    f"{ev.best_threads_gain_pct:g}% faster than the default on this device.")
+    bc = ev.battery_cost
+    if bc and bc.sustained_loss_pct < 10 <= bc.burst_loss_pct:
+        out.append(f"On battery this device only loses its first-minute turbo boost ({bc.model}: "
+                   f"{bc.battery_sustained:g} vs {bc.plugged_sustained:g} tok/s sustained, measured). "
+                   "Long sessions run about as fast unplugged.")
+    elif bc and bc.sustained_loss_pct >= 10:
+        out.append(f"On battery this device runs {bc.sustained_loss_pct:g}% slower even in long sessions "
+                   f"({bc.model}: {bc.battery_sustained:g} vs {bc.plugged_sustained:g} tok/s, measured). Plug in.")
     if ev.sustained_drop_pct is not None and ev.sustained_drop_pct >= 15:
         out.append(f"Speed fell {ev.sustained_drop_pct:g}% after minutes of generation on this device (heat or "
                    "power limits): expect less than the quick benchmark in long sessions.")

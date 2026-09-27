@@ -233,8 +233,16 @@ def sustained_view(r: Result) -> Panel:
         t.append(f"\nBattery draw {s.watts:g} W · {s.joules_per_token:g} J per token")
     if s.battery_hours:
         t.append(f"\nA full battery lasts ~{s.battery_hours:g} h of continuous generation")
+        if s.battery_hours_range:
+            lo, hi = s.battery_hours_range
+            t.append(f" (somewhere between {lo:g} and {hi:g} h)")
     if s.tokens_per_battery_pct:
-        t.append(f" (~{s.tokens_per_battery_pct:,} tokens per 1% of battery)")
+        t.append(f"\n~{s.tokens_per_battery_pct:,} tokens per 1% of battery")
+    if s.energy_source == "battery %":
+        t.append("\nRough: measured from the battery percentage, which only moves in 1% steps. "
+                 "A 15-minute run narrows it.", style="dim")
+    elif s.energy_source:
+        t.append(f"\nMeasured with the battery's {s.energy_source}.", style="dim")
     if rc and rc.start.on_battery is False:
         t.append("\nPlugged in: unplug and run again to measure battery life and energy per token.", style="dim")
     if s.drop_pattern == "step":

@@ -154,3 +154,49 @@ def test_gradual_heating_is_told_apart():
     assert run.drop_pattern == "gradual"
     steady = summarize_sustained(_points([20.0, 19.8, 20.1, 19.9, 19.7, 19.9]), full_wh=None)
     assert steady.drop_pattern is None
+
+
+# The same model, unplugged, 5 minutes: no turbo phase, steady from the start.
+ELITEBOOK_BATTERY = [(14, 14.84, 92), (28, 15.06, 92), (42, 15.03, 92), (56, 14.65, 92), (70, 15.13, 92),
+                     (84, 15.05, 92), (98, 14.93, 92), (111, 14.99, 91), (125, 14.92, 91), (139, 14.93, 91),
+                     (153, 15.50, 91), (166, 15.00, 91), (180, 15.25, 91), (194, 15.07, 91), (208, 15.14, 91),
+                     (222, 14.66, 91), (236, 14.69, 91), (251, 14.77, 91), (266, 14.98, 90), (280, 14.97, 90),
+                     (295, 15.00, 90), (310, 14.58, 90)]
+
+
+def test_real_battery_run_gives_an_honest_range():
+    pts = [SustainedPoint(t_s=t, tokens_per_s=v, battery_pct=b) for t, v, b in ELITEBOOK_BATTERY]
+    run = summarize_sustained(pts, full_wh=None)
+    assert run.drop_pct < 5 and run.drop_pattern is None
+    assert run.energy_source == "battery %"
+    lo, hi = run.battery_hours_range
+    assert lo < run.battery_hours < hi  # 2% seen over 5 min could be 1-3%
+
+
+def test_charge_counter_gives_watts_without_a_power_sensor():
+    # Windows reported DischargeRate as unknown; RemainingCapacity still falls in mWh steps.
+    pts = [SustainedPoint(t_s=t, tokens_per_s=15.0, battery_wh=40.0 - 0.0045 * t) for t in range(0, 301, 30)]
+    run = summarize_sustained(pts, full_wh=45.0)
+    assert run.energy_source == "charge counter"
+    assert run.watts == pytest.approx(16.2, abs=0.05)  # 4.5 mWh/s
+    assert run.joules_per_token == pytest.approx(1.08, abs=0.01)
+    assert run.battery_hours == pytest.approx(2.8, abs=0.05)
+    assert run.battery_hours_range is None
+
+
+def test_windows_remaining_capacity_is_parsed():
+    assert cond.parse_windows_battery('{"DischargeRate": -2147483648, "RemainingCapacity": 38120}')[
+        "battery_remaining_wh"] == 38.12
+
+
+def test_real_runs_show_battery_only_costs_turbo():
+    plugged = summarize_sustained([SustainedPoint(t_s=t, tokens_per_s=v) for t, v in ELITEBOOK_SUSTAINED], None)
+    battery = summarize_sustained([SustainedPoint(t_s=t, tokens_per_s=v) for t, v, _ in ELITEBOOK_BATTERY], None)
+    rows = [_row(kind="sustained", sustained=plugged, conditions=_run_cond(False)),
+            _row(kind="sustained", sustained=battery, conditions=_run_cond(True), timestamp="2026-09-27T12:00:00+00:00")]
+    device, model = get_device("hp-elitebook-840-g6"), analyze("qwen2.5-1.5b")
+    bc = store.evidence(device, model, rows).battery_cost
+    assert bc.burst_loss_pct == pytest.approx(33.1, abs=0.2)
+    assert bc.sustained_loss_pct == 5.1  # 14.77 vs 15.57 tok/s: small next to the 33% burst loss
+    advice = plan(model, device, evidence=store.evidence(device, model, rows)).advice
+    assert any("only loses its first-minute turbo boost" in a for a in advice)
