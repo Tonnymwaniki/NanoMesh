@@ -14,7 +14,11 @@ from nanomesh.model import analyze, gguf_parts, gguf_size
 from nanomesh.planner import FORMATS_BY_NAME, QUALITY_TIERS, Plan, Requirements, free_ram_warning, plan
 from nanomesh import results as store
 from nanomesh.evaluate import evaluate
-from nanomesh.report import bench_table, device_passport, model_summary, plan_view, results_table
+from nanomesh.conditions import advice as condition_advice
+from nanomesh.conditions import dump as dump_conditions
+from nanomesh.conditions import read_conditions
+from nanomesh.report import (bench_table, conditions_view, device_passport, model_summary, plan_view, results_table,
+                             sustained_view, threads_view)
 from nanomesh.toolchain import ToolchainError, conversion_commands, find_toolchain, run
 
 # Windows falls back to cp1252 when output is redirected (`nanomesh plan > out.txt`),
@@ -81,7 +85,8 @@ def scan_device_cmd(
 ):
     """Profile this machine and show its Device Passport."""
     device = recognise(scan_device())
-    data = device.model_dump(exclude_none=True)
+    now = read_conditions()
+    data = {**device.model_dump(exclude_none=True), "conditions": dump_conditions(now)}
     if save:
         save.write_text(json.dumps(data, indent=2), encoding="utf-8")
         console.print(f"[green]Saved device profile to {save}")
@@ -89,6 +94,7 @@ def scan_device_cmd(
         console.print_json(data=data)
     else:
         console.print(device_passport(device))
+        console.print(conditions_view(now))
 
 
 @app.command()
@@ -132,6 +138,9 @@ def plan_cmd(
     info, device = _analyze(model), _resolve_device(device_id)
     p = plan(info, device, _requirements(context, min_quality, min_speed, ram, prefer),
              store.evidence(device, info))
+    if device.is_local:
+        # The plan assumes the device at its best; say what's holding it back right now.
+        p.advice += condition_advice(read_conditions())
     if as_json:
         console.print_json(data=p.model_dump(exclude_none=True))
     else:
@@ -337,6 +346,84 @@ def dashboard(
         console.print("\nStopped.")
     finally:
         server.server_close()
+
+
+def _one_gguf(path: Path):
+    if not (path.is_file() and path.suffix == ".gguf"):
+        console.print(f"[red]{path} is not a .gguf file.")
+        raise typer.Exit(1)
+    missing = [p.name for p in gguf_parts(path) if not p.exists()]
+    if missing:
+        console.print(f"[red]Split model is missing: {', '.join(missing)}")
+        raise typer.Exit(1)
+    tc = find_toolchain()
+    if not tc.bench:
+        console.print("[red]llama-bench not found. Install llama.cpp and set NANOMESH_LLAMA_CPP.")
+        raise typer.Exit(1)
+    return gguf_parts(path)[0], tc
+
+
+@app.command()
+def sustained(
+    path: Path = typer.Argument(..., help="A .gguf model file."),
+    minutes: float = typer.Option(3.0, help="How long to keep generating."),
+    threads: int = typer.Option(None, help="CPU threads (default: llama.cpp's choice)."),
+):
+    """Generate for minutes: measures slowdown from heat, and battery life when unplugged."""
+    from nanomesh.stress import sustained as run_sustained
+
+    f, tc = _one_gguf(path)
+    device = _resolve_device("local")
+    for a in condition_advice(read_conditions()):
+        console.print(f"[yellow]→ {a}")
+    console.print(f"Generating with {f.name} for {minutes:g} min. Leave the machine alone meanwhile.\n")
+
+    def show(pt):
+        extras = [f"{pt.temp_c:g}°C" if pt.temp_c is not None else "",
+                  f"CPU {pt.clock_pct:g}%" if pt.clock_pct is not None else "",
+                  f"battery {pt.battery_pct:g}%" if pt.battery_pct is not None else "",
+                  f"{pt.discharge_w:g} W" if pt.discharge_w else ""]
+        console.print(f"  {int(pt.t_s // 60)}:{int(pt.t_s % 60):02d}  {pt.tokens_per_s:6.2f} tok/s  "
+                      + "  ".join(x for x in extras if x))
+    try:
+        result = run_sustained(tc, f, device, minutes, threads, log=show)
+    except ToolchainError as e:
+        console.print(f"[red]{e}")
+        raise typer.Exit(1)
+    store.save([result])
+    console.print()
+    console.print(sustained_view(result))
+
+
+@app.command()
+def tune(
+    path: Path = typer.Argument(..., help="A .gguf model file."),
+    threads: str = typer.Option(None, help="Comma-separated thread counts to try (default: sensible set for this CPU)."),
+):
+    """Find the fastest CPU thread count for this machine."""
+    from nanomesh.stress import thread_counts, tune_threads
+
+    f, tc = _one_gguf(path)
+    device = _resolve_device("local")
+    try:
+        counts = [int(x) for x in threads.split(",")] if threads else thread_counts()
+    except ValueError:
+        console.print("[red]--threads must be numbers separated by commas, like 2,4,8")
+        raise typer.Exit(1)
+    with console.status(f"Trying {', '.join(map(str, counts))} threads…"):
+        try:
+            rows = tune_threads(tc, f, device, counts)
+        except ToolchainError as e:
+            console.print(f"[red]{e}")
+            raise typer.Exit(1)
+    if not rows:
+        console.print("[red]llama-bench returned no generation results.")
+        raise typer.Exit(1)
+    store.save(rows)
+    console.print(threads_view(rows, device.physical_cores))
+    best = max(rows, key=lambda r: r.gen_tokens_per_s)
+    console.print(f"\nFastest: [bold green]{best.threads} threads[/] (llama.cpp: -t {best.threads}). "
+                  "`nanomesh plan` now includes this.")
 
 
 @app.command()

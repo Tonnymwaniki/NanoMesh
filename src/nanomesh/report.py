@@ -7,6 +7,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from nanomesh.conditions import Conditions
+from nanomesh.conditions import advice as condition_advice
 from nanomesh.hardware import DeviceProfile
 from nanomesh.model import ModelInfo
 from nanomesh.passport import passport
@@ -182,4 +184,74 @@ def results_table(results: list[Result]) -> Table:
         t.add_row(r.timestamp[:16].replace("T", " "), r.device_name, f"{r.model_name} ({size})", r.format or "?",
                   f"{r.gen_tokens_per_s:g} tok/s" if r.gen_tokens_per_s else "—", _fmt_gb(r.peak_rss_gb),
                   f"{r.quality_pct:g}%" if r.quality_pct is not None else "—")
+    return t
+
+
+def conditions_view(c: Conditions) -> Panel:
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold")
+    grid.add_column()
+    power = None
+    if c.on_battery is not None:
+        power = "On battery" if c.on_battery else "Plugged in"
+        if c.battery_pct is not None:
+            power += f" · {c.battery_pct:g}%"
+    rows = [
+        ("Power", power),
+        ("Power plan", " · ".join(x for x in (c.power_plan, c.power_mode) if x) or None),
+        ("CPU speed", f"{c.clock_pct:g}% of rated" if c.clock_pct is not None else (f"{c.cpu_mhz:g} MHz" if c.cpu_mhz else None)),
+        ("CPU temperature", f"{c.temp_c:g}°C" if c.temp_c is not None else "not readable on this system"),
+        ("CPU busy", f"{c.cpu_load_pct:g}%" if c.cpu_load_pct is not None else None),
+        ("Free RAM", f"{c.available_ram_gb:g} GB" if c.available_ram_gb is not None else None),
+        ("Battery draw", f"{c.discharge_w:g} W" if c.discharge_w else None),
+        ("Battery health", f"{c.battery_full_wh:g} of {c.battery_design_wh:g} Wh "
+                           f"({round(100 * c.battery_full_wh / c.battery_design_wh)}%)"
+                           if c.battery_full_wh and c.battery_design_wh else None),
+    ]
+    for k, v in rows:
+        if v:
+            grid.add_row(k, v)
+    notes = Text()
+    for a in condition_advice(c):
+        notes.append(f"\n→ {a}", style="yellow")
+    if not notes:
+        notes.append("\n✓ Nothing in the current conditions should slow a model down.", style="green")
+    return Panel(Group(grid, notes), title="[bold]RIGHT NOW", border_style="cyan")
+
+
+def sustained_view(r: Result) -> Panel:
+    s = r.sustained
+    t = Text()
+    t.append(f"{s.burst_tokens_per_s:g} → {s.sustained_tokens_per_s:g} tok/s", style="bold")
+    t.append(f"  ({s.drop_pct:g}% slower after {s.points[-1].t_s / 60:.1f} min)")
+    rc = r.conditions
+    if rc and rc.temp_max_c is not None:
+        t.append(f"\nHottest: {rc.temp_max_c:g}°C")
+    if rc and rc.clock_pct_min is not None:
+        t.append(f"\nSlowest CPU clock: {rc.clock_pct_min:g}% of rated")
+    if s.watts:
+        t.append(f"\nBattery draw {s.watts:g} W · {s.joules_per_token:g} J per token")
+    if s.battery_hours:
+        t.append(f"\nA full battery lasts ~{s.battery_hours:g} h of continuous generation")
+    if s.tokens_per_battery_pct:
+        t.append(f" (~{s.tokens_per_battery_pct:,} tokens per 1% of battery)")
+    if rc and rc.start.on_battery is False:
+        t.append("\nPlugged in: unplug and run again to measure battery life and energy per token.", style="dim")
+    verdict = ("green", "Speed held steady.") if s.drop_pct < 10 else \
+        ("yellow", "Noticeable slowdown under sustained load.") if s.drop_pct < 25 else \
+        ("red", "Heavy throttling: long sessions run much slower than a quick test suggests.")
+    t.append(f"\n{verdict[1]}", style=verdict[0])
+    return Panel(t, title=f"[bold]SUSTAINED · {r.model_name} {r.format}", border_style="cyan")
+
+
+def threads_view(rows: list[Result], default_threads: int | None) -> Table:
+    best = max(rows, key=lambda r: r.gen_tokens_per_s)
+    t = Table(title=f"Thread counts · {rows[0].model_name} {rows[0].format}", header_style="bold", title_justify="left")
+    for col in ("Threads", "Generate", ""):
+        t.add_column(col)
+    top = best.gen_tokens_per_s
+    for r in sorted(rows, key=lambda r: r.threads):
+        bar = "█" * max(1, round(24 * r.gen_tokens_per_s / top))
+        tags = " ".join(x for x in ("🏆 fastest" if r is best else "", "(llama.cpp default)" if r.threads == default_threads else "") if x)
+        t.add_row(str(r.threads), f"{r.gen_tokens_per_s:g} tok/s", Text(f"{bar} {tags}", style="green" if r is best else "blue"))
     return t

@@ -93,6 +93,11 @@ class Evidence(BaseModel):
     # This model's measured quality loss relative to the typical figures.
     quality_loss_scale: float | None = None
     calibration_runs: int = 0
+    # From `nanomesh tune`: fastest thread count, and its gain over llama.cpp's default.
+    best_threads: int | None = None
+    best_threads_gain_pct: float | None = None
+    # From `nanomesh sustained`: how far speed falls after minutes of generation.
+    sustained_drop_pct: float | None = None
 
 
 class Variant(BaseModel):
@@ -238,7 +243,7 @@ def plan(model: ModelInfo, device: DeviceProfile, req: Requirements | None = Non
     max_b = max_practical_params(max(b.memory_gb for b in budgets), req.context)
     return Plan(model=model, device=device, requirements=req, budgets=budgets, variants=variants,
                 recommended=best.format.name if best else None, max_practical_params_b=max_b,
-                advice=_advice(model, device, variants, best, max_b, req))
+                advice=_advice(model, device, variants, best, max_b, req, ev))
 
 
 def _choose(ok: list[Variant], prefer: str) -> Variant | None:
@@ -261,6 +266,17 @@ def _choose(ok: list[Variant], prefer: str) -> Variant | None:
     ok = [v for v in ok if v.comfortable] or ok
     # (Memory grows strictly with bits-per-weight, and unlike rounded GB it never ties.)
     return max(ok, key=lambda v: (QUALITY_TIERS.index(v.quality), -v.format.bits_per_weight))
+
+
+def _tuning_advice(ev: Evidence) -> list[str]:
+    out = []
+    if ev.best_threads and ev.best_threads_gain_pct and ev.best_threads_gain_pct >= 5:
+        out.append(f"Run with {ev.best_threads} threads (llama.cpp: -t {ev.best_threads}): measured "
+                   f"{ev.best_threads_gain_pct:g}% faster than the default on this device.")
+    if ev.sustained_drop_pct is not None and ev.sustained_drop_pct >= 15:
+        out.append(f"Speed fell {ev.sustained_drop_pct:g}% after minutes of generation on this device (heat or "
+                   "power limits): expect less than the quick benchmark in long sessions.")
+    return out
 
 
 def _no_faster_advice(variants: list[Variant]) -> list[str]:
@@ -296,7 +312,7 @@ def free_ram_warning(device: DeviceProfile, needed_gb: float) -> str | None:
 
 
 def _advice(model: ModelInfo, device: DeviceProfile, variants: list[Variant], best: Variant | None,
-            max_b: float, req: Requirements) -> list[str]:
+            max_b: float, req: Requirements, ev: Evidence) -> list[str]:
     advice = []
     if best is None:
         if not any(v.fits for v in variants):
@@ -328,4 +344,5 @@ def _advice(model: ModelInfo, device: DeviceProfile, variants: list[Variant], be
     if best.quality_source == "typical":
         advice.append("Quality is a typical figure for this format; `nanomesh benchmark` measures it.")
     advice += _no_faster_advice(variants)
+    advice += _tuning_advice(ev)
     return advice

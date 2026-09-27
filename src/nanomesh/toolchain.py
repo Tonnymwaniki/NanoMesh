@@ -184,3 +184,17 @@ def measure_perplexity(tc: Toolchain, model_file: Path, text: Path | None = None
     if result.returncode != 0:
         raise ToolchainError(f"llama-perplexity failed:\n{output.strip()[-2000:]}")
     return parse_perplexity(output)
+
+
+def bench_rows(tc: Toolchain, model_file: Path, args: list[str]) -> list[dict]:
+    """Run llama-bench with extra arguments; return its JSON rows."""
+    if not tc.bench:
+        raise ToolchainError("llama-bench not found. Install llama.cpp and set NANOMESH_LLAMA_CPP.")
+    result = subprocess.run([str(tc.bench), "-m", str(model_file), *args, "-o", "json"],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        raise ToolchainError(f"llama-bench failed:\n{(result.stderr or result.stdout).strip()[-2000:]}")
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        raise ToolchainError("llama-bench did not return JSON output.") from None

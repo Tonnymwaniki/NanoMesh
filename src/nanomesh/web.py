@@ -14,6 +14,9 @@ from urllib.parse import parse_qs, urlparse
 
 from nanomesh import __version__
 from nanomesh import results as store
+from nanomesh.conditions import advice as condition_advice
+from nanomesh.conditions import dump as dump_conditions
+from nanomesh.conditions import read_conditions
 from nanomesh.devices import get_device, load_devices, recognise
 from nanomesh.hardware import DeviceProfile, scan_device
 from nanomesh.model import KNOWN_MODELS, analyze
@@ -73,7 +76,7 @@ def _requirements(q: dict) -> Requirements:
 
 
 def _stats(rows: list[store.Result], device: DeviceProfile) -> dict:
-    mine = [r for r in rows if r.device_key == device.key]
+    mine = [r for r in rows if r.device_key == device.key and r.kind == "benchmark"]
     return {
         "models_measured": len({r.model_name for r in mine}),
         "variants_measured": len({(r.model_name, r.format) for r in mine}),
@@ -113,6 +116,10 @@ def api(path: str, query: str = "") -> dict:
         device = _device(_one(q, "device"))
         p = plan(model, device, _requirements(q), store.evidence(device, model))
         return p.model_dump()
+    if path == "/api/conditions":
+        # Separate from /api/summary: on Windows this shells out and takes a few seconds.
+        c = read_conditions()
+        return {"conditions": dump_conditions(c), "advice": condition_advice(c)}
     if path == "/api/results":
         return {"results": store.rows(store.load())}
     raise ApiError(f"unknown endpoint {path}")

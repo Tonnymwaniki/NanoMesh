@@ -80,3 +80,9 @@ def test_server_binds_loopback_only():
         assert server.server_address[0] == "127.0.0.1"
     finally:
         server.server_close()
+
+
+def test_conditions_endpoint():
+    body = web.api("/api/conditions")
+    assert body["conditions"]["available_ram_gb"] > 0
+    assert isinstance(body["advice"], list)

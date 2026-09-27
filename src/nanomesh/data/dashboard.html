@@ -153,6 +153,18 @@
   .soon-hero p { color: var(--muted); max-width: 640px; }
 
   .legend { font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .now-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .now-item { background: #0b1428; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .now-item small { display: block; color: var(--muted); font-size: 11.5px; }
+  .now-item b { font-size: 15px; }
+  .ok { color: var(--green); } .bad { color: var(--amber); }
+  svg.chart { width: 100%; height: auto; display: block; }
+  svg.chart text { fill: var(--muted); font: 11px var(--mono); }
+  .bars-h { display: grid; gap: 8px; }
+  .bar-row { display: grid; grid-template-columns: 70px minmax(0, 1fr) 90px; gap: 10px; align-items: center; font-size: 13px; }
+  .bar-row .track { height: 12px; background: #0b1428; border-radius: 99px; overflow: hidden; }
+  .bar-row .fill { height: 100%; background: var(--blue); border-radius: 99px; }
+  .bar-row.best .fill { background: var(--green); }
   .loading { color: var(--muted); padding: 30px; }
 
   @media (max-width: 1100px) {
@@ -289,6 +301,95 @@ function passportCard(pp, title) {
     d.notes && h("p", { class: "note" }, d.notes));
 }
 
+function powerLabel(c) {
+  if (!c || !c.start || c.start.on_battery == null) return h("span", { style: "color:var(--faint)" }, "—");
+  return c.on_battery_any ? h("span", { class: "bad" }, "🔋 battery") : h("span", { class: "ok" }, "🔌 plugged in");
+}
+
+function conditionsCard() {
+  const body = h("div", {}, h("div", { class: "loading", style: "padding:8px 0" }, "Reading power, clocks and temperature…"));
+  const load = async () => {
+    try {
+      const { conditions: c, advice } = await getJSON("/api/conditions");
+      const items = [
+        ["Power", c.on_battery == null ? "No battery" : c.on_battery ? `On battery${c.battery_pct != null ? ` · ${c.battery_pct}%` : ""}` : `Plugged in${c.battery_pct != null ? ` · ${c.battery_pct}%` : ""}`],
+        ["Power mode", [c.power_plan, c.power_mode].filter(Boolean).join(" · ") || "—"],
+        ["CPU speed", c.clock_pct != null ? `${c.clock_pct}% of rated` : c.cpu_mhz ? `${c.cpu_mhz} MHz` : "—"],
+        ["CPU temperature", c.temp_c != null ? `${c.temp_c}°C` : "Not readable here"],
+        ["CPU busy", c.cpu_load_pct != null ? `${c.cpu_load_pct}%` : "—"],
+        ["Free RAM", c.available_ram_gb != null ? `${c.available_ram_gb} GB` : "—"],
+      ];
+      body.replaceChildren(
+        h("div", { class: "now-grid" }, items.map(([k, v]) => h("div", { class: "now-item" }, h("small", {}, k), h("b", {}, v)))),
+        advice.length ? h("ul", { class: "advice" }, advice.map(a => h("li", { class: "bad" }, a)))
+          : h("p", { class: "ok", style: "margin:0" }, "✓ Nothing right now should slow a model down."));
+    } catch (err) { body.replaceChildren(h("p", { class: "err" }, err.message)); }
+  };
+  load();
+  return h("section", { class: "card" },
+    h("div", { class: "card-head" }, h("h2", {}, "Right now"), h("button", { class: "linkish", type: "button", onclick: load }, "Refresh")),
+    body);
+}
+
+function lineChart(points) {
+  // Speed over time, drawn to scale; temperature as a second line when known.
+  const W = 960, H = 260, L = 48, R = 48, T = 12, B = 28;
+  const maxT = Math.max(...points.map(p => p.t_s), 1);
+  const maxS = Math.max(...points.map(p => p.tokens_per_s)) * 1.15 || 1;
+  const temps = points.filter(p => p.temp_c != null);
+  const x = t => L + (W - L - R) * t / maxT, ys = v => H - B - (H - T - B) * v / maxS;
+  const yt = v => H - B - (H - T - B) * (v - 30) / 80;  // 30–110 °C
+  const ns = "http://www.w3.org/2000/svg";
+  const el = (tag, attrs, text) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (text != null) e.textContent = text; return e; };
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, class: "chart", role: "img", "aria-label": "Generation speed over time" });
+  for (let i = 0; i <= 4; i++) {
+    const v = maxS * i / 4, y = ys(v);
+    svg.append(el("line", { x1: L, x2: W - R, y1: y, y2: y, stroke: "#1f2d4a" }), el("text", { x: L - 6, y: y + 4, "text-anchor": "end" }, v.toFixed(v < 10 ? 1 : 0)));
+  }
+  svg.append(el("text", { x: L, y: H - 8 }, "0:00"), el("text", { x: W - R, y: H - 8, "text-anchor": "end" }, `${Math.floor(maxT / 60)}:${String(Math.round(maxT % 60)).padStart(2, "0")}`));
+  const path = pts => pts.map((p, i) => `${i ? "L" : "M"}${x(p[0]).toFixed(1)},${p[1].toFixed(1)}`).join("");
+  svg.append(el("path", { d: path(points.map(p => [p.t_s, ys(p.tokens_per_s)])), fill: "none", stroke: "#3b82f6", "stroke-width": 2.5 }));
+  points.forEach(p => svg.append(el("circle", { cx: x(p.t_s), cy: ys(p.tokens_per_s), r: 3, fill: "#3b82f6" })));
+  if (temps.length > 1) {
+    svg.append(el("path", { d: path(temps.map(p => [p.t_s, yt(p.temp_c)])), fill: "none", stroke: "#f59e0b", "stroke-width": 1.5, "stroke-dasharray": "4 3" }));
+    [30, 70, 110].forEach(v => svg.append(el("text", { x: W - R + 6, y: yt(v) + 4 }, `${v}°`)));
+  }
+  return svg;
+}
+
+function sustainedSection(rows) {
+  if (!rows.length) return h("section", { class: "card", style: "margin-top:16px" }, h("h2", {}, "Sustained load"),
+    h("p", { class: "sub" }, "How speed holds up over minutes, as the device heats up. On battery it also measures energy per token and battery life."),
+    copyCmd("nanomesh sustained path/to/model.gguf --minutes 3"));
+  const r = rows[rows.length - 1], s = r.sustained;
+  const facts = [
+    ["Burst → sustained", `${s.burst_tokens_per_s} → ${s.sustained_tokens_per_s} tok/s`],
+    ["Slowdown", `${s.drop_pct}%`],
+    ["Hottest", r.conditions?.temp_max_c != null ? `${r.conditions.temp_max_c}°C` : "not readable"],
+    ["Battery life", s.battery_hours ? `~${s.battery_hours} h of generation` : r.conditions?.on_battery_any ? "run longer to measure" : "unplug to measure"],
+    ["Energy", s.joules_per_token ? `${s.joules_per_token} J per token` : "—"],
+  ];
+  return h("section", { class: "card", style: "margin-top:16px" },
+    h("div", { class: "card-head" }, h("h2", {}, `Sustained load · ${r.model_name} ${r.format}`), h("span", { class: "sub" }, fmt.when(r.timestamp))),
+    h("div", { class: "now-grid", style: "grid-template-columns:repeat(auto-fill,minmax(160px,1fr))" }, facts.map(([k, v]) => h("div", { class: "now-item" }, h("small", {}, k), h("b", {}, v)))),
+    lineChart(s.points),
+    h("div", { class: "legend" }, "Blue: generation speed (tok/s) · dashed amber: CPU temperature, when the system reports it"));
+}
+
+function threadsSection(rows) {
+  if (!rows.length) return h("section", { class: "card", style: "margin-top:16px" }, h("h2", {}, "Thread counts"),
+    h("p", { class: "sub" }, "More threads isn't always faster. Find this machine's best setting:"), copyCmd("nanomesh tune path/to/model.gguf"));
+  const last = rows[rows.length - 1];
+  const sweep = rows.filter(r => r.timestamp === last.timestamp && r.model_name === last.model_name);
+  const top = Math.max(...sweep.map(r => r.gen_tokens_per_s));
+  return h("section", { class: "card", style: "margin-top:16px" },
+    h("div", { class: "card-head" }, h("h2", {}, `Thread counts · ${last.model_name} ${last.format}`), h("span", { class: "sub" }, fmt.when(last.timestamp))),
+    h("div", { class: "bars-h" }, [...sweep].sort((a, b) => a.threads - b.threads).map(r =>
+      h("div", { class: `bar-row${r.gen_tokens_per_s === top ? " best" : ""}` }, h("span", {}, `${r.threads} threads`),
+        h("div", { class: "track" }, h("div", { class: "fill", style: `width:${(100 * r.gen_tokens_per_s / top).toFixed(1)}%` })),
+        h("span", { class: "num-cell" }, `${r.gen_tokens_per_s.toFixed(1)} tok/s`)))));
+}
+
 function resultsTable(rows, { limit, compact } = {}) {
   if (!rows.length) {
     return h("div", { class: "empty" }, h("b", {}, "No benchmarks yet"),
@@ -304,12 +405,13 @@ function resultsTable(rows, { limit, compact } = {}) {
         h("td", {}, r.quality_pct == null ? "—" : `${+r.quality_pct.toFixed(1)}%`))))));
   }
   return h("div", { class: "table-wrap" }, h("table", {},
-    h("thead", {}, h("tr", {}, ["Model", "Variant", "Size", "Generate", "Peak RAM", "Quality", "Device", "When"].map(c => h("th", {}, c)))),
+    h("thead", {}, h("tr", {}, ["Model", "Variant", "Size", "Generate", "Peak RAM", "Quality", "Power", "Device", "When"].map(c => h("th", {}, c)))),
     h("tbody", {}, shown.map(r => h("tr", {},
       h("td", {}, `${r.model_name} (${fmt.params(r.model_params)})`), h("td", {}, r.format || "?"),
       h("td", { class: "num-cell" }, fmt.gb(r.file_size_gb)), h("td", {}, speed(r.gen_tokens_per_s, "measured")),
       h("td", { class: "num-cell" }, fmt.gb(r.peak_rss_gb)),
       h("td", {}, r.quality_pct == null ? "—" : h("span", {}, `${+r.quality_pct.toFixed(2)}% of ${r.reference_format}`)),
+      h("td", {}, powerLabel(r.conditions)),
       h("td", {}, r.device_name), h("td", { style: "color:var(--muted)" }, fmt.when(r.timestamp)))))));
 }
 
@@ -343,9 +445,9 @@ const views = {
             h("button", { class: "btn", style: "margin-top:16px", onclick: () => go("optimize") }, "Plan a model")),
           h("section", { class: "card" },
             h("div", { class: "card-head" }, h("h2", {}, "Measured on this machine"), h("button", { class: "linkish", onclick: () => go("benchmarks") }, "View all")),
-            resultsTable(s.results.filter(r => r.device_key === s.device_key), { limit: 6, compact: true })),
+            resultsTable(s.results.filter(r => r.device_key === s.device_key && (r.kind || "benchmark") === "benchmark"), { limit: 6, compact: true })),
           codeCard()),
-        passportCard(s.passport, "This device")),
+        h("div", { class: "grid" }, conditionsCard(), passportCard(s.passport, "This device"))),
     ];
   },
 
@@ -400,7 +502,9 @@ const views = {
     return [
       h("div", { class: "top" }, h("div", {}, h("h1", {}, "Benchmarks"),
         h("p", { class: "sub" }, "Everything measured with nanomesh benchmark. Plans use these instead of estimates."))),
-      h("section", { class: "card" }, resultsTable(s.results)),
+      h("section", { class: "card" }, resultsTable(s.results.filter(r => (r.kind || "benchmark") === "benchmark"))),
+      sustainedSection(s.results.filter(r => r.kind === "sustained")),
+      threadsSection(s.results.filter(r => r.kind === "threads")),
       h("p", { class: "note" }, "Stored in ", h("code", {}, s.results_path), ". One JSON object per line.")];
   },
 
