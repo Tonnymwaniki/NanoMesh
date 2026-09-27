@@ -46,6 +46,8 @@ def default_locations() -> list[tuple[str, Path]]:
               ("folder", home / "models")]
     if os.name == "nt":
         places.append(("folder", Path("C:/models")))
+    if os.environ.get("NANOMESH_MODELS_DIR"):  # where `nanomesh pull` downloads to
+        places.append(("folder", Path(os.environ["NANOMESH_MODELS_DIR"]).expanduser()))
     for extra in filter(None, os.environ.get("NANOMESH_MODEL_DIRS", "").split(os.pathsep)):
         places.append(("folder", Path(extra)))
     return places

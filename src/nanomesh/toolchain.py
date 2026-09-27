@@ -28,6 +28,7 @@ class Toolchain(BaseModel):
     quantize: Path | None = None
     bench: Path | None = None
     perplexity: Path | None = None
+    server: Path | None = None
 
     @property
     def can_convert(self) -> bool:
@@ -48,15 +49,57 @@ def _find_binary(name: str, roots: list[Path]) -> Path | None:
     return Path(found) if found else None
 
 
+def _config_path() -> Path:
+    from nanomesh.results import home
+
+    return home() / "config.json"
+
+
+def _saved_roots() -> list[Path]:
+    try:
+        return [Path(p) for p in json.loads(_config_path().read_text(encoding="utf-8")).get("llama_cpp", [])]
+    except (OSError, ValueError, AttributeError):
+        return []
+
+
+def _remember(roots: list[Path]) -> None:
+    """Save where llama.cpp is, so processes started without NANOMESH_LLAMA_CPP
+    (an editor's MCP server, a new terminal) find it too."""
+    path = _config_path()
+    try:
+        config = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if config.get("llama_cpp") != [str(r) for r in roots]:
+            config["llama_cpp"] = [str(r) for r in roots]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(config, indent=1), encoding="utf-8")
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
+def _default_roots() -> list[Path]:
+    """Where people usually unpack llama.cpp."""
+    places = [Path.home() / "llama.cpp"]
+    if sys.platform == "win32":
+        places.append(Path("C:/llama.cpp"))
+        if local := os.environ.get("LOCALAPPDATA"):
+            places += [Path(local) / "llama.cpp", Path(local) / "Programs" / "llama.cpp"]
+    return [p for p in places if p.is_dir()]
+
+
 def find_toolchain() -> Toolchain:
-    roots = [Path(p).expanduser() for p in os.environ.get("NANOMESH_LLAMA_CPP", "").split(os.pathsep) if p]
+    env = [Path(p).expanduser() for p in os.environ.get("NANOMESH_LLAMA_CPP", "").split(os.pathsep) if p]
+    roots = list(dict.fromkeys(env + _saved_roots() + _default_roots()))
     convert = next((r / "convert_hf_to_gguf.py" for r in roots if (r / "convert_hf_to_gguf.py").is_file()), None)
-    return Toolchain(
+    tc = Toolchain(
         convert_script=convert,
         quantize=_find_binary("llama-quantize", roots),
         bench=_find_binary("llama-bench", roots),
         perplexity=_find_binary("llama-perplexity", roots),
+        server=_find_binary("llama-server", roots),
     )
+    if env and tc.bench and any(r in tc.bench.parents for r in env):
+        _remember(env)
+    return tc
 
 
 def conversion_commands(tc: Toolchain, model_dir: Path, out_dir: Path, formats: list[str]) -> list[list[str]]:

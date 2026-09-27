@@ -17,7 +17,7 @@ from statistics import median
 from pydantic import BaseModel
 
 from nanomesh import __version__
-from nanomesh.conditions import RunConditions
+from nanomesh.conditions import BUSY_CPU_PCT, RunConditions
 from nanomesh.hardware import DeviceProfile
 from nanomesh.model import ModelInfo
 from nanomesh.planner import FORMATS_BY_NAME, BatteryCost, Evidence
@@ -68,6 +68,12 @@ class Result(BaseModel):
     @property
     def on_battery(self) -> bool:
         return bool(self.conditions and self.conditions.on_battery_any)
+
+    @property
+    def busy(self) -> bool:
+        """Other programs were using the CPU heavily when the run started."""
+        load = self.conditions.start.cpu_load_pct if self.conditions else None
+        return load is not None and load >= BUSY_CPU_PCT
 
 
 class SustainedPoint(BaseModel):
@@ -175,9 +181,10 @@ def evidence(device: DeviceProfile, model: ModelInfo, results: list[Result] | No
     if any(r.on_battery for r in results) and not all(r.on_battery for r in results):
         results = [r for r in results if not r.on_battery]
     speeds, quality, params = {}, {}, None
-    # Later results overwrite earlier ones, but a steady-state measurement
-    # always beats a quick one: quick runs may have caught a turbo phase.
-    for r in sorted(results, key=lambda r: r.steady):
+    # Later results overwrite earlier ones, but a run on a quiet machine always
+    # beats one where other programs were busy, and a steady-state measurement
+    # beats a quick one: quick runs may have caught a turbo phase.
+    for r in sorted(results, key=lambda r: (not r.busy, r.steady)):
         if r.kind != "benchmark":
             continue  # thread sweeps and sustained runs aren't default-settings speeds
         if r.format and _same_model(r, model):
@@ -205,7 +212,7 @@ def evidence(device: DeviceProfile, model: ModelInfo, results: list[Result] | No
     compute = max(c for _, c in runs) if cpu_bound else None
 
     threads, gain = _best_threads(results, device)
-    sustained_runs = [r.sustained for r in results if r.kind == "sustained" and r.sustained]
+    sustained_runs = [r.sustained for r in _quiet_first(r for r in results if r.kind == "sustained" and r.sustained)]
 
     return Evidence(speeds=speeds, quality=quality, model_params=params,
                     best_threads=threads, best_threads_gain_pct=gain, battery_cost=battery_cost,
@@ -216,6 +223,12 @@ def evidence(device: DeviceProfile, model: ModelInfo, results: list[Result] | No
                     calibration_runs=len(runs))
 
 
+def _quiet_first(results) -> list[Result]:
+    """Oldest first, but runs taken while other programs were busy go before
+    quiet ones, so "the latest run" is the latest representative one."""
+    return sorted(results, key=lambda r: not r.busy)
+
+
 def battery_cost(device: DeviceProfile) -> BatteryCost | None:
     """What battery costs this device, from its sustained runs (any model)."""
     return _battery_cost([r for r in load() if r.device_key == device.key])
@@ -223,8 +236,8 @@ def battery_cost(device: DeviceProfile) -> BatteryCost | None:
 
 def _battery_cost(results: list[Result]) -> BatteryCost | None:
     """Compare the latest sustained runs of one model plugged in vs on battery."""
-    runs = [r for r in results if r.kind == "sustained" and r.sustained and r.conditions
-            and r.conditions.start.on_battery is not None]
+    runs = _quiet_first(r for r in results if r.kind == "sustained" and r.sustained and r.conditions
+                        and r.conditions.start.on_battery is not None)
     for model in {(r.model_name, r.format) for r in reversed(runs)}:
         mine = [r for r in runs if (r.model_name, r.format) == model]
         plugged = next((r for r in reversed(mine) if not r.on_battery), None)

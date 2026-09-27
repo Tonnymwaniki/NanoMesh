@@ -97,6 +97,7 @@ def inspect(device: DeviceProfile | None = None) -> Environment:
     llama = {"llama-bench": str(tc.bench) if tc.bench else None,
              "llama-quantize": str(tc.quantize) if tc.quantize else None,
              "llama-perplexity": str(tc.perplexity) if tc.perplexity else None,
+             "llama-server": str(tc.server) if tc.server else None,
              "convert_hf_to_gguf.py": str(tc.convert_script) if tc.convert_script else None}
     try:
         disk = round(shutil.disk_usage(os.path.expanduser("~")).free / GB, 1)
@@ -166,6 +167,9 @@ def diagnose(env: Environment, device: DeviceProfile | None = None) -> list[Find
                              "to its folder."))
     else:
         f.append(Finding(level="ok", topic="llama.cpp", message=f"llama.cpp tools found ({llama['llama-bench']})."))
+        if not llama.get("llama-server"):
+            f.append(Finding(level="warn", topic="llama.cpp", message="llama-server is missing, so NanoMesh can't "
+                             "serve models to apps and editors.", fix="Use a full llama.cpp release, which includes it."))
         if not llama.get("llama-perplexity"):
             f.append(Finding(level="warn", topic="llama.cpp", message="llama-perplexity is missing, so quality can't "
                              "be measured.", fix="Use a full llama.cpp release, which includes it."))

@@ -32,6 +32,27 @@ Windows, Linux, macOS and Android (via Termux) are supported; see
 
 ## Usage
 
+### Get a working local AI: search, pull, serve
+
+```sh
+nanomesh search qwen2.5 coder 7b                 # Hugging Face GGUFs, sized for this machine
+nanomesh pull Qwen/Qwen2.5-1.5B-Instruct-GGUF    # downloads the best file for this machine
+nanomesh serve ~/models/Qwen2.5-1.5B-Instruct-GGUF/qwen2.5-1.5b-instruct-q8_0.gguf
+```
+
+- **`search`** matches every word against repository names and, for each repository, picks the file
+  that suits this device: its download size, memory, predicted speed and quality. Models you've
+  benchmarked use your measurements.
+- **`pull`** shows the download size and asks first (`--yes` to skip). It saves to `C:\models` (if it
+  exists) or `~/models` (`NANOMESH_MODELS_DIR` to change), and resumes after a dropped connection or
+  a Ctrl+C when run again. Each file is checked against Hugging Face's SHA-256. `--file Q4_K_M` picks
+  a format. Gated models need `HF_TOKEN`.
+- **`serve`** starts llama.cpp's `llama-server` in the background, on 127.0.0.1 only, with the
+  thread count `nanomesh tune` measured as best. It prints ready-to-paste snippets for Python,
+  JavaScript, curl/PowerShell and VS Code's Continue extension. The endpoint is OpenAI-compatible
+  (`http://127.0.0.1:8080/v1`). `nanomesh serve --status` shows running servers and
+  `nanomesh serve --stop` stops them.
+
 ### Conditions, heat, battery and threads
 
 `nanomesh scan-device` ends with a **Right now** panel: power source and battery, power plan and
@@ -67,8 +88,18 @@ nanomesh mcp --config     # prints ready-to-paste setup for Claude Code, VS Code
 | `benchmark_results` | Everything measured here |
 | `environment_doctor` | Broken or mismatched Python/PyTorch/GPU/llama.cpp setups, with fixes |
 | `training_plan` | Will fine-tuning fit: full, LoRA or QLoRA |
+| `search_models` | Hugging Face GGUFs sized for this machine: which file, download size, speed, quality |
+| `download_model` | Download a model (a background job), resuming and checksum-verified |
+| `benchmark_model` | Measure a model here (a background job) so plans use real numbers |
+| `job_status` / `cancel_job` | Progress of downloads and benchmarks |
+| `start_model_server` / `model_server_status` / `stop_model_server` | Serve a model as a local OpenAI-compatible API, with connection snippets |
 
-It runs over stdio on your machine and sends nothing anywhere.
+So an agent can go from "I want a coding model on this laptop" to a running endpoint: search,
+tell you the download size, download, benchmark, serve. Tools that act (download, benchmark,
+serve, stop, cancel) are marked as such, so clients ask you first; the rest are read-only.
+
+It runs over stdio on your machine. Only `search_models` and `download_model` go online, to
+Hugging Face.
 
 ### Doctor, local models and training plans
 
@@ -239,6 +270,7 @@ Treat estimates as a way to narrow the search; `benchmark` is the ground truth.
       per-model quality calibration came out of it
 - [ ] ONNX / OpenVINO / LiteRT export; AWQ/GPTQ; vision models
 - [x] Agent-ready: `doctor`, `models`, `train-plan` and a local MCP server for coding agents
+- [x] Search, download and serve: from "I want a model" to a local OpenAI-compatible endpoint
 - [ ] VS Code extension panel over the same tools
 - [ ] Shared benchmark database: upload `results.jsonl` so every user of a device benefits
 - [ ] Android on-device benchmarking, NPU profiles

@@ -471,6 +471,124 @@ def models(
         console.print(models_view(found, device.name))
 
 
+@app.command("search")
+def search_cmd(
+    query: list[str] = typer.Argument(..., help="Words in the model's name, e.g. qwen2.5 coder 7b."),
+    limit: int = typer.Option(5, help="How many repositories to show."),
+    context: int = typer.Option(4096, help="Context length to budget for."),
+    min_quality: str = typer.Option("good", help="Minimum quality: a percentage or a tier."),
+    prefer: str = typer.Option("balanced", help="balanced | quality | speed | size"),
+    as_json: bool = typer.Option(False, "--json"),
+):
+    """Search Hugging Face for GGUF models and pick the best file for this device."""
+    from nanomesh.catalog import CatalogError, search
+    from nanomesh.report import search_view
+
+    device = _resolve_device("local")
+    with console.status("Searching Hugging Face…"):
+        try:
+            found = search(" ".join(query), device, limit=limit,
+                           req=_requirements(context, min_quality, None, None, prefer))
+        except CatalogError as e:
+            console.print(f"[red]{e}")
+            raise typer.Exit(1)
+    if as_json:
+        console.print_json(data=[m.model_dump(exclude_none=True) for m in found])
+    else:
+        console.print(search_view(found, device.name))
+
+
+@app.command()
+def pull(
+    repo: str = typer.Argument(..., help="Hugging Face repository, e.g. Qwen/Qwen2.5-1.5B-Instruct-GGUF."),
+    file: str = typer.Option(None, "--file", "-f", help="File name or format (Q4_K_M). Default: best for this device."),
+    to: Path = typer.Option(None, "--to", help="Folder to save into (default: your models folder)."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Don't ask before downloading."),
+):
+    """Download a model from Hugging Face. Resumes if interrupted; checks it arrived intact."""
+    from rich.progress import BarColumn, DownloadColumn, Progress, TimeRemainingColumn, TransferSpeedColumn
+
+    from nanomesh.catalog import CatalogError
+    from nanomesh.download import DownloadError, download
+    from nanomesh.download import pull as plan_pull
+
+    device = _resolve_device("local")
+    with console.status("Looking up the files…"):
+        try:
+            dp = plan_pull(repo, file, device, dest=to)
+        except CatalogError as e:
+            console.print(f"[red]{e}")
+            raise typer.Exit(1)
+    parts = f" ({len(dp.file.parts)} parts)" if len(dp.file.parts) > 1 else ""
+    console.print(f"[bold]{dp.file.name}[/]{parts} · {dp.file.size_gb:g} GB → {dp.target.parent}")
+    if dp.remaining_gb == 0 and dp.target.exists():
+        console.print(f"[green]Already downloaded:[/] {dp.target}")
+        return
+    if dp.have_bytes:
+        console.print(f"Resuming: {dp.remaining_gb:g} GB left.")
+    if dp.disk_free_gb is not None:
+        console.print(f"[dim]{dp.disk_free_gb:g} GB free on that drive.")
+    if not yes and not typer.confirm(f"Download {dp.remaining_gb:g} GB?", default=True):
+        raise typer.Exit(1)
+    with Progress("[progress.description]{task.description}", BarColumn(), DownloadColumn(), TransferSpeedColumn(),
+                  TimeRemainingColumn(), console=console) as bar:
+        task = bar.add_task("Downloading", total=dp.file.size_bytes, completed=dp.have_bytes)
+        try:
+            path = download(dp, lambda done, total: bar.update(task, completed=done, total=total))
+        except KeyboardInterrupt:
+            console.print("[yellow]Paused. Run the same command to resume.")
+            raise typer.Exit(130)
+        except DownloadError as e:
+            console.print(f"[red]{e}")
+            raise typer.Exit(1)
+    console.print(f"[green]Saved:[/] {path}")
+    console.print(f"Next: measure it with  nanomesh benchmark \"{path}\" --quick --no-quality"
+                  f"\n      or use it with   nanomesh serve \"{path}\"")
+
+
+@app.command("serve")
+def serve_cmd(
+    path: Path = typer.Argument(None, help="A .gguf model file to serve."),
+    port: int = typer.Option(None, help="Port (default 8080)."),
+    context: int = typer.Option(4096, help="Context length in tokens."),
+    threads: int = typer.Option(None, help="CPU threads (default: the best `nanomesh tune` measured)."),
+    stop: bool = typer.Option(False, "--stop", help="Stop NanoMesh's model servers (or the one on --port)."),
+    status: bool = typer.Option(False, "--status", help="Show running model servers."),
+):
+    """Serve a model as a local OpenAI-compatible API for editors, scripts and apps."""
+    from nanomesh import serve as srv
+    from nanomesh.report import servers_view
+
+    if stop:
+        stopped = srv.stop(port)
+        console.print("\n".join(f"Stopped {s.model} on port {s.port}." for s in stopped) or "Nothing to stop.")
+        return
+    if status or path is None:
+        console.print(servers_view(srv.running()))
+        return
+    if not path.is_file():
+        console.print(f"[red]No such file: {path}")
+        raise typer.Exit(1)
+    if threads is None:
+        threads = store.evidence(_resolve_device("local"), _analyze(str(path))).best_threads
+    with console.status(f"Loading {path.name}…"):
+        try:
+            server, state = srv.start(path, port=port or srv.DEFAULT_PORT, context=context, threads=threads)
+        except ToolchainError as e:
+            console.print(f"[red]{e}")
+            raise typer.Exit(1)
+    if state == "ok":
+        console.print(f"[green]Serving {server.model}[/] at [bold]{server.base_url}[/]"
+                      + (f" · {threads} threads (measured best)" if threads else ""))
+    else:
+        console.print(f"[yellow]{server.model} is still loading[/] at {server.base_url}; "
+                      "check with nanomesh serve --status")
+    for title, snippet in srv.connect_snippets(server).items():
+        console.print(f"\n[bold]{title}[/]")
+        console.print(snippet, highlight=False, soft_wrap=True)
+    console.print(f"\n[dim]Runs in the background. Stop with: nanomesh serve --stop · log: {server.log}")
+
+
 @app.command("train-plan")
 def train_plan_cmd(
     model: str = typer.Argument(..., help="Model dir, known name (e.g. qwen2.5-7b), or size like '7b'."),

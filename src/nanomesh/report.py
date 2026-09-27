@@ -190,14 +190,30 @@ def bench_table(results: list[Result]) -> Table:
     return t
 
 
+def _run_label(r: Result) -> str:
+    power = (" · battery" if r.on_battery else "") + (" · busy" if r.busy else "")
+    if r.kind == "sustained":
+        return "sustained" + power
+    if r.kind == "threads":
+        return f"thread sweep · {r.threads}t" if r.threads else "thread sweep"
+    return ("steady" if r.steady else "quick") + power
+
+
+def _generate(r: Result) -> str:
+    if r.kind == "sustained" and r.sustained:
+        # A sustained run's headline is where it settled, not its first seconds.
+        return f"{r.sustained.burst_tokens_per_s:g} → {r.sustained.sustained_tokens_per_s:g} tok/s"
+    return f"{r.gen_tokens_per_s:g} tok/s" if r.gen_tokens_per_s else "—"
+
+
 def results_table(results: list[Result]) -> Table:
     t = Table(title="Recorded benchmark results", header_style="bold", title_justify="left")
-    for col in ("When", "Device", "Model", "Variant", "Generate", "Peak RAM", "Quality"):
+    for col in ("When", "Device", "Model", "Variant", "Run", "Generate", "Peak RAM", "Quality"):
         t.add_column(col)
     for r in results:
         size = params_str(r.model_params)
         t.add_row(r.timestamp[:16].replace("T", " "), r.device_name, f"{r.model_name} ({size})", r.format or "?",
-                  f"{r.gen_tokens_per_s:g} tok/s" if r.gen_tokens_per_s else "—", _fmt_gb(r.peak_rss_gb),
+                  _run_label(r), _generate(r), _fmt_gb(r.peak_rss_gb),
                   f"{r.quality_pct:g}%" if r.quality_pct is not None else "—")
     return t
 
@@ -258,6 +274,10 @@ def sustained_view(r: Result) -> Panel:
                  "A 15-minute run narrows it.", style="dim")
     elif s.energy_source:
         t.append(f"\nMeasured with the battery's {s.energy_source}.", style="dim")
+    if r.busy:
+        t.append(f"\nOther programs were using {rc.start.cpu_load_pct:g}% of the CPU when this started, so these "
+                 "figures include their load. NanoMesh prefers quiet runs; close them and run again for a clean "
+                 "measurement.", style="yellow")
     if rc and rc.start.on_battery is False:
         t.append("\nPlugged in: unplug and run again to measure battery life and energy per token.", style="dim")
     if s.drop_pattern == "step":
@@ -360,3 +380,43 @@ def train_plan_view(tp) -> Group:
     for a in tp.advice:
         advice.append(f"\n→ {a}", style="yellow")
     return Group(t, info, advice)
+
+
+def search_view(found, device_name: str) -> Group | Text:
+    if not found:
+        return Text("No GGUF repositories on Hugging Face have every word of that search in their name. "
+                    "Try fewer words, e.g. 'qwen2.5 7b'.", style="yellow")
+    t = Table(title=f"Hugging Face · sized for {device_name}", header_style="bold", title_justify="left")
+    for col in ("Repository", "Downloads", "Size", "Best file here", "Download", "Memory", "Speed", "Quality"):
+        t.add_column(col, overflow="fold")
+    for m in found:
+        opt = next((o for o in m.options if o.file == m.recommended), None)
+        downloads = f"{m.downloads:,}" if m.downloads is not None else "—"
+        size = f"{m.params_b:g}B" if m.params_b else "?"
+        if opt:
+            speed = f"{opt.tokens_per_s:g} tok/s ({opt.speed_source})" if opt.tokens_per_s else "—"
+            quality = f"{opt.quality_pct:g}% ({opt.quality_source})" if opt.quality_pct is not None else "—"
+            name = opt.file.rsplit("/", 1)[-1] + (f" · {opt.parts} parts" if opt.parts > 1 else "")
+            t.add_row(m.repo, downloads, size, name, f"{opt.download_gb:g} GB", f"{opt.memory_gb:g} GB", speed, quality)
+        else:
+            t.add_row(m.repo, downloads, size, Text(m.reason or "—", style="yellow"), "", "", "", "")
+    best = next((m for m in found if m.recommended), None)
+    hint = Text()
+    if best:
+        hint.append(f"\nDownload the best file for this device:  nanomesh pull {best.repo}", style="bold")
+        hint.append("\nOr pick one: nanomesh pull <repo> --file Q4_K_M", style="dim")
+    return Group(t, hint)
+
+
+def servers_view(servers) -> Group | Text:
+    from nanomesh.serve import health
+
+    if not servers:
+        return Text("No NanoMesh model servers running. Start one: nanomesh serve <model.gguf>", style="dim")
+    t = Table(title="Model servers", header_style="bold", title_justify="left")
+    for col in ("Model", "Endpoint", "State", "Context", "Threads", "Since"):
+        t.add_column(col)
+    for s in servers:
+        t.add_row(s.model, s.base_url, health(s.port) or "not responding", str(s.context),
+                  str(s.threads or "auto"), s.started[:16].replace("T", " "))
+    return Group(t, Text("Stop with: nanomesh serve --stop", style="dim"))
