@@ -52,6 +52,11 @@ class Result(BaseModel):
     # "benchmark" (llama-bench defaults), "sustained" (minutes of generation) or
     # "threads" (one row of a thread-count sweep).
     kind: str = "benchmark"
+    # Steady-state benchmarks warm up until speed settles before measuring, so
+    # they reflect long sessions; quick ones may catch a laptop's turbo phase.
+    steady: bool = False
+    warmup_s: float | None = None
+    burst_tokens_per_s: float | None = None  # speed when started cold (turbo)
     conditions: RunConditions | None = None
     sustained: SustainedRun | None = None
 
@@ -165,7 +170,9 @@ def evidence(device: DeviceProfile, model: ModelInfo, results: list[Result] | No
     if any(r.on_battery for r in results) and not all(r.on_battery for r in results):
         results = [r for r in results if not r.on_battery]
     speeds, quality, params = {}, {}, None
-    for r in results:  # later results overwrite earlier ones
+    # Later results overwrite earlier ones, but a steady-state measurement
+    # always beats a quick one: quick runs may have caught a turbo phase.
+    for r in sorted(results, key=lambda r: r.steady):
         if r.kind != "benchmark":
             continue  # thread sweeps and sustained runs aren't default-settings speeds
         if r.format and _same_model(r, model):
@@ -179,8 +186,11 @@ def evidence(device: DeviceProfile, model: ModelInfo, results: list[Result] | No
     # memory once, so tok/s x file size is the bandwidth a run achieved; the
     # best run shows what the device can deliver. Runs well below that were
     # compute-bound: the CPU couldn't unpack the weights any faster.
+    bench_runs = [r for r in results if r.gen_tokens_per_s and r.file_size_gb >= 0.05 and r.kind == "benchmark"]
+    if any(r.steady for r in bench_runs):
+        bench_runs = [r for r in bench_runs if r.steady]  # don't calibrate from turbo bursts
     runs = [(r.gen_tokens_per_s * r.file_size_gb * GIB_TO_GB, r.gen_tokens_per_s * r.model_params / 1e9)
-            for r in results if r.gen_tokens_per_s and r.file_size_gb >= 0.05 and r.kind == "benchmark"]
+            for r in bench_runs]
     bandwidth = max((bw for bw, _ in runs), default=None)
     # Every run proves the CPU manages at least tok/s x params, so the ceiling
     # is the best any run achieved (a 7B model gets more out of the CPU than a

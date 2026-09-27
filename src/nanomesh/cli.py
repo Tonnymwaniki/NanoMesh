@@ -14,6 +14,7 @@ from nanomesh.model import analyze, gguf_parts, gguf_size
 from nanomesh.planner import FORMATS_BY_NAME, QUALITY_TIERS, Plan, Requirements, free_ram_warning, plan
 from nanomesh import results as store
 from nanomesh.evaluate import evaluate
+from nanomesh.stress import WARMUP_SECONDS
 from nanomesh.conditions import advice as condition_advice
 from nanomesh.conditions import dump as dump_conditions
 from nanomesh.conditions import read_conditions
@@ -188,6 +189,7 @@ def optimize(
     dry_run: bool = typer.Option(False, help="Only write the plan and print the conversion commands."),
     bench: bool = typer.Option(True, help="Benchmark built variants (needs llama-bench)."),
     quality: bool = typer.Option(True, help="Measure quality loss vs the original (needs llama-perplexity)."),
+    quick: bool = typer.Option(False, "--quick", help="Benchmark without the steady-state warm-up."),
 ):
     """Plan, convert and quantize a model into a deployment-ready package."""
     if not model_dir.is_dir():
@@ -233,7 +235,8 @@ def optimize(
                 raise typer.Exit(1)
         if bench and tc.bench:
             files = [out / f"model-{f}.gguf" for f in to_build]
-            results = _evaluate(tc, files, device, measure_quality, out / f"model-{reference}.gguf" if reference else None)
+            results = _evaluate(tc, files, device, measure_quality, out / f"model-{reference}.gguf" if reference else None,
+                                warmup_s=0 if quick else WARMUP_SECONDS)
             results = [r for r in results if r.format in formats]
             (out / "benchmark.json").write_text(json.dumps(store.rows(results), indent=2), encoding="utf-8")
             console.print(bench_table(results))
@@ -244,11 +247,15 @@ def optimize(
     console.print(f"\n[green]Package written to {out}/")
 
 
-def _evaluate(tc, files, device, quality, reference=None, eval_text=None, threads=None) -> list[store.Result]:
+def _evaluate(tc, files, device, quality, reference=None, eval_text=None, threads=None,
+              warmup_s: float = WARMUP_SECONDS) -> list[store.Result]:
+    if warmup_s > 0:
+        console.print(f"[dim]Steady-state mode: warming up at least {warmup_s:g}s first so laptop turbo boost doesn't "
+                      "inflate the numbers (--quick to skip).")
     with console.status("Measuring…") as status:
         try:
             results = evaluate(tc, files, device, quality=quality, reference=reference, eval_text=eval_text,
-                               threads=threads, log=status.update)
+                               threads=threads, warmup_s=warmup_s, log=status.update)
         except ToolchainError as e:
             console.print(f"[red]{e}")
             raise typer.Exit(1)
@@ -286,6 +293,8 @@ def benchmark(
     reference: Path = typer.Option(None, help="Reference .gguf for quality (default: highest precision that fits)."),
     eval_text: Path = typer.Option(None, help="Text file to measure perplexity on (default: bundled sample)."),
     save: Path = typer.Option(None, help="Also write results to this JSON file."),
+    quick: bool = typer.Option(False, "--quick", help="Skip the warm-up: faster, but may catch a laptop's turbo phase."),
+    warmup: float = typer.Option(WARMUP_SECONDS, help="Minimum warm-up in seconds before measuring."),
 ):
     """Measure real speed, memory and quality of GGUF models on this machine."""
     files = sorted(path.glob("*.gguf")) if path.is_dir() else [path]
@@ -315,7 +324,7 @@ def benchmark(
     largest = max(gguf_size(f) for f in files) / 1024**3
     if warning := free_ram_warning(device, largest + 0.3):
         console.print(f"[yellow]⚠ {warning}")
-    results = _evaluate(tc, files, device, quality, reference, eval_text, threads)
+    results = _evaluate(tc, files, device, quality, reference, eval_text, threads, 0 if quick else warmup)
     console.print(bench_table(results))
     if save:
         save.write_text(json.dumps(store.rows(results), indent=2), encoding="utf-8")

@@ -200,3 +200,56 @@ def test_real_runs_show_battery_only_costs_turbo():
     assert bc.sustained_loss_pct == 5.1  # 14.77 vs 15.57 tok/s: small next to the 33% burst loss
     advice = plan(model, device, evidence=store.evidence(device, model, rows)).advice
     assert any("only loses its first-minute turbo boost" in a for a in advice)
+
+
+def test_warm_up_with_a_minimum_gets_past_turbo(monkeypatch):
+    from nanomesh import stress
+
+    # Turbo for ~70 s (like the EliteBook), then steady; each round "takes" 10 s.
+    speeds = iter([22.4, 22.2, 21.9, 21.4, 20.7, 20.6, 20.4, 15.5, 15.6, 15.5, 15.7, 15.4])
+    clock = iter(range(10, 1000, 10))
+    monkeypatch.setattr(stress.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(stress, "bench_rows", lambda tc, f, args: [{"n_gen": 32, "avg_ts": next(speeds)}])
+
+    # Without a minimum, three agreeing turbo rounds look "settled": the trap.
+    speeds_copy = iter([22.4, 22.2, 21.9])
+    monkeypatch.setattr(stress, "bench_rows", lambda tc, f, args: [{"n_gen": 32, "avg_ts": next(speeds_copy)}])
+    assert stress.warm_up(tc=None, f=None, min_seconds=0).settled_tokens_per_s == 22.2
+
+    monkeypatch.setattr(stress, "bench_rows", lambda tc, f, args: [{"n_gen": 32, "avg_ts": next(speeds)}])
+    warm = stress.warm_up(tc=None, f=None, min_seconds=90)
+    assert warm.burst_tokens_per_s == 22.4
+    assert warm.settled_tokens_per_s == 15.5 and warm.settled
+
+
+def test_warm_up_respects_minimum_time(monkeypatch):
+    from nanomesh import stress
+
+    clock = iter(range(0, 1000, 10))  # each round "takes" 10 s
+    monkeypatch.setattr(stress.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(stress, "bench_rows", lambda tc, f, args: [{"n_gen": 32, "avg_ts": 15.0}])
+    warm = stress.warm_up(tc=None, f=None, min_seconds=90)
+    # Steady from the start, but it still runs past 90 s: a turbo phase can
+    # look stable for a while before it ends.
+    assert warm.seconds >= 90 and warm.settled
+
+
+def test_warm_up_gives_up_at_the_cap(monkeypatch):
+    from nanomesh import stress
+
+    clock = iter(range(0, 10_000, 10))
+    speeds = iter([20.0 - 0.01 * i if i % 2 else 10.0 for i in range(1000)])  # never settles
+    monkeypatch.setattr(stress.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(stress, "bench_rows", lambda tc, f, args: [{"n_gen": 32, "avg_ts": next(speeds)}])
+    warm = stress.warm_up(tc=None, f=None, min_seconds=30, max_seconds=120)
+    assert warm.seconds >= 120 and not warm.settled
+
+
+def test_steady_results_beat_quick_ones():
+    device, model = get_device("hp-elitebook-840-g6"), analyze("qwen2.5-1.5b")
+    steady = _row(gen_tokens_per_s=15.5, steady=True, burst_tokens_per_s=22.3)
+    quick_later = _row(gen_tokens_per_s=22.0, timestamp="2026-09-27T12:00:00+00:00")  # caught turbo
+    ev = store.evidence(device, model, [steady, quick_later])
+    assert ev.speeds["Q4_K_M"] == 15.5
+    # Calibration ignores the quick run's turbo-inflated bandwidth too.
+    assert ev.effective_bandwidth_gbps == pytest.approx(15.5 * 1.04 * 1.0737, abs=0.1)

@@ -156,6 +156,12 @@ Every benchmark also records the conditions it ran under: plugged in or on batte
 CPU speed and temperature where the system reports them. Calibration prefers plugged-in runs,
 because laptops slow down on battery.
 
+By default `benchmark` measures the **steady state**: before measuring, it generates until the
+speed settles (at least 90 s for the first file, 20 s for the rest). Laptops boost for their first
+minute or so: an HP EliteBook 840 G6 ran Qwen2.5-1.5B at 22 tok/s for about 70 s, then settled at
+15.5. The cold-start speed is recorded too. `--quick` skips the warm-up; calibration prefers
+steady results over quick ones.
+
 For each file, `benchmark` measures prompt/generation speed and peak RAM (`llama-bench`)
 and quality: perplexity relative to the highest-precision variant that fits in memory
 (`llama-perplexity`, on a bundled public-domain text; `--eval-text` to use your own).

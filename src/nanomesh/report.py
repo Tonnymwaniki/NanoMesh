@@ -164,14 +164,24 @@ def plan_view(p: Plan) -> Group:
 
 def bench_table(results: list[Result]) -> Table:
     t = Table(title="Measured on this machine", header_style="bold", title_justify="left")
-    for col in ("Variant", "Size", "Prompt", "Generate", "Peak RAM", "Quality"):
-        t.add_column(col, no_wrap=col != "Variant")
+    steady = any(r.steady for r in results)
+    burst = any(r.burst_tokens_per_s for r in results)
+    t.title = "Measured on this machine · speeds in tok/s" + (" · steady state" if steady else "")
+    cols = ["Variant", "Size", "Prompt", "Generate"] + (["Cold start"] if burst else []) + ["Peak RAM", "Quality"]
+    for col in cols:
+        t.add_column(col, no_wrap=True, min_width=6 if col == "Variant" else None)
+
+    def num(v):
+        return f"{v:.1f}" if v is not None and v < 1000 else (f"{v:,.0f}" if v else "—")
+
     for r in results:
         q = f"{r.quality_pct:g}% of {r.reference_format}" if r.quality_pct is not None else "—"
-        t.add_row(r.format or r.model_name, _fmt_gb(r.file_size_gb),
-                  f"{r.prompt_tokens_per_s:g} tok/s" if r.prompt_tokens_per_s else "—",
-                  f"{r.gen_tokens_per_s:g} tok/s" if r.gen_tokens_per_s else "—",
-                  _fmt_gb(r.peak_rss_gb), q)
+        row = [r.format or r.model_name, _fmt_gb(r.file_size_gb), num(r.prompt_tokens_per_s), num(r.gen_tokens_per_s)]
+        if burst:
+            row.append(num(r.burst_tokens_per_s) if r.burst_tokens_per_s else "")
+        t.add_row(*row, _fmt_gb(r.peak_rss_gb), q)
+    if burst:
+        t.caption = "Cold start: the first seconds from idle, when laptops boost. Steady: what long sessions get."
     return t
 
 

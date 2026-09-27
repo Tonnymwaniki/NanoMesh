@@ -58,7 +58,7 @@ e.g. `models/qwen1.5b/`:
 
 ```sh
 nanomesh plan qwen2.5-1.5b          # note the predicted speeds (~) and quality
-nanomesh benchmark models/qwen1.5b  # takes a few minutes; close other apps first
+nanomesh benchmark models/qwen1.5b  # warms up ~90 s first, then measures; close other apps
 nanomesh plan qwen2.5-1.5b          # now shows measured values (✓)
 nanomesh plan qwen2.5-7b            # other models are now calibrated (*) too
 ```

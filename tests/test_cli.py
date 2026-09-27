@@ -93,7 +93,7 @@ def test_benchmark_measures_quality_and_feeds_plan(tmp_path, monkeypatch):
     write_gguf(models / "model-F16.gguf", file_type=1)
     write_gguf(models / "model-Q4_K_M.gguf", file_type=15)
 
-    result = runner.invoke(app, ["benchmark", str(models)])
+    result = runner.invoke(app, ["benchmark", str(models), "--quick"])
     assert result.exit_code == 0, result.output
 
     rows = json.loads(runner.invoke(app, ["results", "--json"]).output)
@@ -157,12 +157,35 @@ def test_benchmark_treats_split_gguf_as_one_model(tmp_path, monkeypatch):
     whole = analyze(str(models / "qwen2.5-7b-instruct-q4_k_m-00002-of-00002.gguf"))
     assert whole.params == 64 * 100 + 64 * 64 * 2
 
-    result = runner.invoke(app, ["benchmark", str(models), "--no-quality"])
+    result = runner.invoke(app, ["benchmark", str(models), "--no-quality", "--quick"])
     assert result.exit_code == 0, result.output
     rows = json.loads(runner.invoke(app, ["results", "--json"]).output)
     assert len(rows) == 1
     assert rows[0]["model_params"] == whole.params
 
     (models / "qwen2.5-7b-instruct-q4_k_m-00002-of-00002.gguf").unlink()
-    missing = runner.invoke(app, ["benchmark", str(models), "--no-quality"])
+    missing = runner.invoke(app, ["benchmark", str(models), "--no-quality", "--quick"])
     assert missing.exit_code == 1 and "missing" in missing.output
+
+
+def test_benchmark_is_steady_state_by_default(tmp_path, monkeypatch):
+    import sys
+
+    import pytest
+
+    if sys.platform == "win32":
+        pytest.skip("fake llama.cpp binaries are POSIX scripts")
+    from conftest import write_gguf
+
+    monkeypatch.setenv("NANOMESH_LLAMA_CPP", _fake_llama_cpp(tmp_path))
+    models = tmp_path / "models"
+    models.mkdir()
+    write_gguf(models / "model-Q4_K_M.gguf", file_type=15)
+    write_gguf(models / "model-Q8_0.gguf", file_type=7)
+    result = runner.invoke(app, ["benchmark", str(models), "--no-quality", "--warmup", "0.3"])
+    assert result.exit_code == 0, result.output
+    assert "Steady-state mode" in result.output
+    rows = json.loads(runner.invoke(app, ["results", "--json"]).output)
+    assert all(r["steady"] and r["warmup_s"] >= 0.3 for r in rows)
+    # Only the first file starts cold, so only it shows a cold-start speed.
+    assert rows[0]["burst_tokens_per_s"] and rows[1]["burst_tokens_per_s"] is None
