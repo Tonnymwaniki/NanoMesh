@@ -319,12 +319,16 @@ def _no_faster_advice(variants: list[Variant]) -> list[str]:
     """Flag low-bit variants that measured/calibrated no faster than the next
     step up: on CPU-bound devices they only cost quality."""
     known = [v for v in variants if v.fits and v.speed_source in ("measured", "calibrated")]
-    slower = [low.format.label for high, low in zip(known, known[1:])
-              if low.tokens_per_s <= high.tokens_per_s * 1.05 and low.quality_pct < high.quality_pct]
-    if not slower:
+    pairs = [(high, low) for high, low in zip(known, known[1:])
+             if low.tokens_per_s <= high.tokens_per_s * 1.05 and low.quality_pct < high.quality_pct]
+    if not pairs:
         return []
-    return [f"{', '.join(slower)} {'is' if len(slower) == 1 else 'are'} no faster than the next step up on "
-            "this device (the CPU, not memory, is the limit), so going lower only costs quality."]
+    # Name the variant where speed tops out and give the numbers, so neither a
+    # person nor an agent reads "no faster" as "no faster than the recommendation".
+    top, slower = pairs[0][0], [low for _, low in pairs]
+    speeds = ", ".join(f"{v.format.label} {v.tokens_per_s:g}" for v in slower)
+    return [f"Speed tops out at {top.format.label} ({top.tokens_per_s:g} tok/s) on this device: {speeds} tok/s "
+            "are no faster (the CPU, not memory, is the limit), so going lower only costs quality."]
 
 
 def _mark_pareto(variants: list[Variant]) -> None:

@@ -55,7 +55,10 @@ def test_calibrated_speeds_respect_the_compute_ceiling(elitebook_results):
     assert q5.speed_source == "calibrated" and q4.speed_source == "measured"
     # INT3 and INT4 measured the same speed, so INT5 can't be predicted faster.
     assert q5.tokens_per_s <= q4.tokens_per_s * 1.05
-    assert any("no faster than the next step up" in a for a in p.advice)
+    # Named with numbers: Copilot read "INT4 is no faster than the next step up"
+    # as "no faster than INT8", which measured 10.4 against INT4's 15.1.
+    assert any(a.startswith(f"Speed tops out at INT5 ({q5.tokens_per_s:g} tok/s)") and "INT4 15.09" in a
+               for a in p.advice)
 
 
 def test_small_model_quality_loss_is_calibrated(elitebook_results):
