@@ -190,14 +190,30 @@ def bench_table(results: list[Result]) -> Table:
     return t
 
 
+def _run_label(r: Result) -> str:
+    power = " · battery" if r.on_battery else ""
+    if r.kind == "sustained":
+        return "sustained" + power
+    if r.kind == "threads":
+        return f"thread sweep · {r.threads}t" if r.threads else "thread sweep"
+    return ("steady" if r.steady else "quick") + power
+
+
+def _generate(r: Result) -> str:
+    if r.kind == "sustained" and r.sustained:
+        # A sustained run's headline is where it settled, not its first seconds.
+        return f"{r.sustained.burst_tokens_per_s:g} → {r.sustained.sustained_tokens_per_s:g} tok/s"
+    return f"{r.gen_tokens_per_s:g} tok/s" if r.gen_tokens_per_s else "—"
+
+
 def results_table(results: list[Result]) -> Table:
     t = Table(title="Recorded benchmark results", header_style="bold", title_justify="left")
-    for col in ("When", "Device", "Model", "Variant", "Generate", "Peak RAM", "Quality"):
+    for col in ("When", "Device", "Model", "Variant", "Run", "Generate", "Peak RAM", "Quality"):
         t.add_column(col)
     for r in results:
         size = params_str(r.model_params)
         t.add_row(r.timestamp[:16].replace("T", " "), r.device_name, f"{r.model_name} ({size})", r.format or "?",
-                  f"{r.gen_tokens_per_s:g} tok/s" if r.gen_tokens_per_s else "—", _fmt_gb(r.peak_rss_gb),
+                  _run_label(r), _generate(r), _fmt_gb(r.peak_rss_gb),
                   f"{r.quality_pct:g}%" if r.quality_pct is not None else "—")
     return t
 

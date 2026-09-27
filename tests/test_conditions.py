@@ -294,3 +294,25 @@ def test_warm_up_reports_the_turbo_window(monkeypatch):
     clock = iter(range(10, 1000, 10))
     warm = stress.warm_up(tc=None, f=None, min_seconds=90)
     assert warm.drop_at_s == 30 and warm.drop_at_s < 80
+
+
+def test_results_table_labels_each_kind_of_run():
+    from rich.console import Console
+
+    from nanomesh.report import results_table
+
+    plugged = summarize_sustained([SustainedPoint(t_s=t, tokens_per_s=v) for t, v in ELITEBOOK_SUSTAINED], None)
+    battery = summarize_sustained([SustainedPoint(t_s=t, tokens_per_s=v) for t, v, _ in ELITEBOOK_BATTERY], None)
+    rows = [_row(kind="threads", threads=4, gen_tokens_per_s=21.95),
+            _row(kind="sustained", sustained=plugged, gen_tokens_per_s=22.34, conditions=_run_cond(False)),
+            _row(kind="sustained", sustained=battery, gen_tokens_per_s=14.95, conditions=_run_cond(True)),
+            _row(steady=True, gen_tokens_per_s=18.11)]
+    console = Console(width=250, record=True)
+    console.print(results_table(rows))
+    text = console.export_text()
+    # On the EliteBook these all read as plain "Q4_K_M 22.34 tok/s" rows, so
+    # nobody (Copilot included) could tell a turbo burst from a settled speed.
+    assert "thread sweep · 4t" in text
+    assert "→ 15.57 tok/s" in text  # plugged in: settled at 15.57 after the turbo burst
+    assert "sustained · battery" in text and "→ 14.77 tok/s" in text
+    assert "steady" in text
