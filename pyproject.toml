@@ -24,7 +24,8 @@ where = ["src"]
 nanomesh = ["data/*.json", "data/*.txt", "data/*.html"]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "onnx", "onnxruntime"]
+onnx = ["onnxruntime"]  # benchmark ONNX vision and embedding models
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -49,31 +49,19 @@ def _find_binary(name: str, roots: list[Path]) -> Path | None:
     return Path(found) if found else None
 
 
-def _config_path() -> Path:
-    from nanomesh.results import home
-
-    return home() / "config.json"
-
-
 def _saved_roots() -> list[Path]:
-    try:
-        return [Path(p) for p in json.loads(_config_path().read_text(encoding="utf-8")).get("llama_cpp", [])]
-    except (OSError, ValueError, AttributeError):
-        return []
+    from nanomesh import config
+
+    saved = config.get("llama_cpp", [])
+    return [Path(p) for p in saved] if isinstance(saved, list) else []
 
 
 def _remember(roots: list[Path]) -> None:
     """Save where llama.cpp is, so processes started without NANOMESH_LLAMA_CPP
     (an editor's MCP server, a new terminal) find it too."""
-    path = _config_path()
-    try:
-        config = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-        if config.get("llama_cpp") != [str(r) for r in roots]:
-            config["llama_cpp"] = [str(r) for r in roots]
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(config, indent=1), encoding="utf-8")
-    except (OSError, ValueError, AttributeError):
-        pass
+    from nanomesh import config
+
+    config.set("llama_cpp", [str(r) for r in roots])
 
 
 def _default_roots() -> list[Path]:

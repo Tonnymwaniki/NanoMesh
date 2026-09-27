@@ -118,6 +118,23 @@ Or, in VS Code, open a project and ask Copilot: *"What AI does this project use,
 locally on this laptop?"* It should call `analyze_project` with the workspace folder, then offer to download
 and serve the suggested model.
 
+## 10. Fit Cards for speech and vision
+
+```sh
+nanomesh config --data-price 100 --currency KES   # your price per GB of data
+nanomesh fit whisper
+nanomesh fit yolo11
+nanomesh search --task speech
+nanomesh search --task detection
+```
+
+To turn an estimate into a measurement: `pip install onnxruntime`, export or download an ONNX model
+(for example `yolo export model=yolo11n.pt format=onnx` after `pip install ultralytics`), then
+`nanomesh benchmark yolo11n.onnx`, and run `nanomesh fit yolo11` again.
+
+In VS Code, ask Copilot: *"Which Whisper model should I use for transcription on this laptop, and how many
+hours of audio would a full battery handle?"*
+
 ## Android (Termux)
 
 NanoMesh runs inside [Termux](https://termux.dev) (install it from F-Droid; the

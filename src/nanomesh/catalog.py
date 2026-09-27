@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from nanomesh import __version__
 from nanomesh import results as store
+from nanomesh.fit import FitCard
 from nanomesh.hardware import GB, DeviceProfile
 from nanomesh.model import KNOWN_MODELS, SPLIT_RE, ModelInfo, analyze
 from nanomesh.planner import FORMATS, RUNTIME_OVERHEAD_BYTES, QuantFormat, Requirements, _choose, plan
@@ -249,3 +250,88 @@ def search(query: str, device: DeviceProfile, *, limit: int = 5, req: Requiremen
     flat = lambda s: re.sub(r"[\s/_-]+", "", s.lower())  # noqa: E731  ("1.5b" vs "1.5B", "3.2" vs "3-2")
     hits = [m for m in listing if all(flat(w) in flat(m.get("id", "")) for w in words)][:limit]
     return [evaluate_repo(m["id"], device, req, fetch, m) for m in hits]
+
+
+# ---- search by task: speech, vision, embeddings ----
+
+TASK_TAGS = {  # NanoMesh task -> Hugging Face pipeline tag
+    "speech-to-text": "automatic-speech-recognition",
+    "object detection": "object-detection",
+    "image classification": "image-classification",
+    "embeddings": "sentence-similarity",
+    "text generation": "text-generation",
+}
+TASK_ALIASES = {"speech": "speech-to-text", "asr": "speech-to-text", "transcription": "speech-to-text",
+                "detection": "object detection", "vision": "object detection", "classification": "image classification",
+                "embedding": "embeddings", "search": "embeddings", "text": "text generation", "chat": "text generation"}
+
+
+def task_name(task: str) -> str:
+    t = task.lower().strip().replace("_", " ").replace("-", " ")
+    for name in TASK_TAGS:
+        if t == name.replace("-", " "):
+            return name
+    if t in TASK_ALIASES:
+        return TASK_ALIASES[t]
+    raise CatalogError(f"Unknown task '{task}'. Use one of: speech, detection, classification, embeddings, text.")
+
+
+class TaskResult(BaseModel):
+    source: str  # huggingface | kaggle
+    id: str
+    url: str
+    downloads: int | None = None
+    card: FitCard
+
+
+def _license(meta: dict) -> str | None:
+    lic = (meta.get("cardData") or {}).get("license")
+    if isinstance(lic, list):
+        lic = ", ".join(lic)
+    return lic or next((t.split(":", 1)[1] for t in meta.get("tags", []) if t.startswith("license:")), None)
+
+
+def search_task(query: str, task: str, device: DeviceProfile, *, limit: int = 5, fetch: Fetch | None = None,
+                sources: tuple[str, ...] = ("huggingface",)) -> list[TaskResult]:
+    """Models for a task that fit this device, from Hugging Face (and Kaggle),
+    each with its Fit Card: fitting, fast-enough ones first."""
+    from nanomesh.fit import fit
+
+    task = task_name(task)
+    fetch = fetch or fetch_json
+    out: list[TaskResult] = []
+    if "huggingface" in sources:
+        words = _words(query)
+        params = {"pipeline_tag": TASK_TAGS[task], "sort": "downloads", "direction": "-1", "limit": SEARCH_POOL}
+        if words:
+            params["search"] = max(words, key=len)
+        flat = lambda s: re.sub(r"[\s/_-]+", "", s.lower())  # noqa: E731
+        listing = [m for m in fetch(f"{HF}/api/models?{urllib.parse.urlencode(params)}")
+                   if all(flat(w) in flat(m.get("id", "")) for w in words)]
+        for m in listing[: limit * 2]:
+            try:
+                meta = fetch(f"{HF}/api/models/{m['id']}") or {}
+            except CatalogError:
+                meta = m
+            total = (meta.get("safetensors") or {}).get("total")
+            tags = list(m.get("tags") or meta.get("tags") or []) + [m.get("library_name") or meta.get("library_name")]
+            c = fit(m["id"], device, license=_license(meta), task=task, params=total, tags=tags)
+            if c:
+                out.append(TaskResult(source="huggingface", id=m["id"], url=f"{HF}/{m['id']}",
+                                      downloads=m.get("downloads"), card=c))
+    if "kaggle" in sources:
+        from nanomesh.kaggle import search_models as kaggle_search
+
+        out += kaggle_search(query or task, device, task, limit=limit)
+    # Fits and fast enough first, then the most downloaded.
+    out.sort(key=lambda r: (not r.card.fits, r.card.usable is False, -(r.downloads or 0)))
+    return out[:limit] if len(sources) == 1 else out[: limit * 2]
+
+
+def runs_well_hint(found: list[TaskResult], task: str, device: DeviceProfile) -> str | None:
+    """When none of the results runs well on the device, a model that does."""
+    from nanomesh.fit import runs_well
+
+    if any(r.card.fits and r.card.usable for r in found):
+        return None
+    return runs_well(task_name(task), device)

@@ -464,3 +464,59 @@ def project_view(r) -> Group:
         files = ", ".join(f"{m['file']} ({m['size_gb']:g} GB)" for m in r.model_files[:8])
         parts.append(Text(f"Model files: {files}", style="dim"))
     return Group(*parts)
+
+
+def _size(gb: float) -> str:
+    return f"{gb * 1024:.0f} MB" if gb < 0.1 else f"{gb:g} GB"
+
+
+def fit_card_view(c) -> Panel:
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold")
+    grid.add_column()
+    fits = Text("yes", style="green") if c.fits else Text("no", style="red")
+    if c.memory_gb is not None:
+        fits.append(f" · {c.memory_gb:g} GB of the {c.budget_gb:g} GB budget", style="")
+    rows = [("Fits", fits)]
+    if not c.fits and c.notes and c.notes[0].startswith("Can't run on"):
+        fits.append(f" · {c.notes[0].split(': ', 1)[1]}", style="red")
+    if c.speed is not None:
+        sp = Text(f"{c.speed:g} {c.speed_unit}", style="bold" if c.usable else "yellow")
+        sp.append(f" ({c.speed_source})", style="dim")
+        if c.usable is False:
+            sp.append(" · too slow for comfortable use", style="yellow")
+        rows.append(("Speed", sp))
+    for label, value in (("Quality", c.quality), ("Download", _size(c.download_gb) + (f" · {c.data_cost}"
+                         if c.data_cost else "") if c.download_gb else None), ("Battery", c.battery),
+                         ("Licence", c.license), ("Better here", c.alternative), ("How to run", c.how)):
+        if value:
+            rows.append((label, Text(value)))
+    for k, v in rows:
+        grid.add_row(k, v)
+    shown = c.notes[1:] if not c.fits and c.notes and c.notes[0].startswith("Can't run on") else c.notes
+    body = Group(grid, *[Text(f"· {n}", style="dim") for n in shown])
+    return Panel(body, title=f"[bold]{c.model}[/] · {c.task} · on {c.device}", title_align="left",
+                 border_style="green" if c.fits and c.usable else "yellow")
+
+
+def task_search_view(found, task: str, device_name: str, hint: str | None = None) -> Group | Text:
+    """hint: a model known to run well here, shown when none of the results does."""
+    if not found:
+        return Text(f"No {task} models found for that search. Try fewer words, or none to see the most popular.",
+                    style="yellow")
+    t = Table(title=f"{task} models · sized for {device_name}", header_style="bold", title_justify="left")
+    for col in ("Model", "Source", "Downloads", "Fits", "Speed", "Memory", "Download", "Licence"):
+        t.add_column(col, overflow="fold")
+    for r in found:
+        c = r.card
+        fits = Text("yes", style="green") if c.fits else Text("no", style="red")
+        speed = Text(f"{c.speed:g} {c.speed_unit}" if c.speed is not None else "—",
+                     style="" if c.usable is not False else "yellow")
+        name = r.id if c.model == r.id else f"{r.id}\n→ {c.model.split(' → ')[-1]}"
+        t.add_row(name, r.source, f"{r.downloads:,}" if r.downloads is not None else "—", fits, speed,
+                  f"{c.memory_gb:g} GB" if c.memory_gb is not None else "—",
+                  _size(c.download_gb) if c.download_gb else "—", c.license or "—")
+    footer = [Text("Details for one: nanomesh fit <model>", style="dim")]
+    if hint:
+        footer.insert(0, Text(f"None of these is known to run well here. Runs well: {hint}", style="yellow"))
+    return Group(t, *footer)

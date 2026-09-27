@@ -53,6 +53,44 @@ nanomesh serve ~/models/Qwen2.5-1.5B-Instruct-GGUF/qwen2.5-1.5b-instruct-q8_0.gg
   (`http://127.0.0.1:8080/v1`). `nanomesh serve --status` shows running servers and
   `nanomesh serve --stop` stops them.
 
+### Fit Cards: speech, vision, embeddings and text models on this device
+
+```sh
+nanomesh fit whisper                       # the best Whisper size for this machine
+nanomesh fit yolo11n -d redmi-14c-4gb      # a specific model on a specific device
+nanomesh search --task speech              # popular speech models, sized for this machine
+nanomesh search swahili --task speech --source all   # Hugging Face and Kaggle
+nanomesh config --data-price 100 --currency KES      # show what downloads cost
+```
+
+A **Fit Card** is NanoMesh's answer for any model on any device:
+
+- **Fits:** memory against the device's budget.
+- **Speed**, in the unit that matters for the task: × real-time for speech, images/s for vision,
+  sentences/s for embeddings, tok/s for text. Each figure is marked measured, calibrated or estimated.
+- **Quality:** published figures, such as COCO mAP or ImageNet top-1, or where the model sits in its family.
+- **Download size**, and its cost if you've set a data price.
+- **Battery:** hours of audio or number of images per full charge, from a battery run on this device.
+- **Licence.**
+- **A better-fitting model of the same family**, when there is one.
+- **How to run it.**
+
+NanoMesh knows these families: Whisper (tiny to large-v3, turbo, distil), YOLOv8 and YOLO11, image
+classifiers (MobileNetV3, EfficientNet, ResNet, ViT) and embedding models (MiniLM, BGE, E5, nomic).
+Text models go through the planner. Models outside these families are sized from their parameter count.
+
+Estimates come from published compute figures and the device's CPU. Benchmarking any model of a kind
+turns its card into a measurement, and calibrates the rest of that kind on this device:
+
+```sh
+pip install onnxruntime                    # or: pip install -e ".[onnx]"
+nanomesh benchmark yolo11n.onnx            # ONNX Runtime: vision and embedding models
+nanomesh benchmark ggml-small.bin          # whisper.cpp (NANOMESH_WHISPER_CPP, or C:\whisper.cpp, ~/whisper.cpp)
+```
+
+Kaggle search needs your Kaggle API token: on kaggle.com go to Settings > API > Create New Token, then
+save `kaggle.json` in `~/.kaggle/`.
+
 ### Project: what AI does this codebase use, and what could run locally?
 
 ```sh
@@ -120,9 +158,10 @@ nanomesh mcp --config     # prints ready-to-paste setup for Claude Code, VS Code
 | `environment_doctor` | Broken or mismatched Python/PyTorch/GPU/llama.cpp setups, with fixes |
 | `training_plan` | Will fine-tuning fit: full, LoRA or QLoRA |
 | `analyze_project` | The AI a codebase uses (file:line) and what could run locally instead, with the code change |
-| `search_models` | Hugging Face GGUFs sized for this machine: which file, download size, speed, quality |
+| `fit_card` | Fit Card of any model (speech, vision, embeddings, text) on this machine or a database device |
+| `search_models` | Hugging Face GGUFs sized for this machine; with a task, speech/vision/embedding models from Hugging Face and Kaggle with Fit Cards |
 | `download_model` | Download a model (a background job), resuming and checksum-verified |
-| `benchmark_model` | Measure a model here (a background job) so plans use real numbers |
+| `benchmark_model` | Measure a GGUF, ONNX or Whisper model here (a background job) so plans and Fit Cards use real numbers |
 | `job_status` / `cancel_job` | Progress of downloads and benchmarks |
 | `start_model_server` / `model_server_status` / `stop_model_server` | Serve a model as a local OpenAI-compatible API, with connection snippets |
 
@@ -304,6 +343,8 @@ Treat estimates as a way to narrow the search; `benchmark` is the ground truth.
 - [x] Agent-ready: `doctor`, `models`, `train-plan` and a local MCP server for coding agents
 - [x] Search, download and serve: from "I want a model" to a local OpenAI-compatible endpoint
 - [x] Project scan: the AI a codebase uses and what could run locally instead
+- [x] Fit Cards for speech, vision and embedding models; task search on Hugging Face and Kaggle
+- [ ] Datasets: find, size and preview (Hugging Face, Kaggle) and whether training fits this device
 - [ ] VS Code extension panel over the same tools
 - [ ] Shared benchmark database: upload `results.jsonl` so every user of a device benefits
 - [ ] Android on-device benchmarking, NPU profiles
