@@ -28,6 +28,7 @@ class Toolchain(BaseModel):
     quantize: Path | None = None
     bench: Path | None = None
     perplexity: Path | None = None
+    server: Path | None = None
 
     @property
     def can_convert(self) -> bool:
@@ -56,6 +57,7 @@ def find_toolchain() -> Toolchain:
         quantize=_find_binary("llama-quantize", roots),
         bench=_find_binary("llama-bench", roots),
         perplexity=_find_binary("llama-perplexity", roots),
+        server=_find_binary("llama-server", roots),
     )
 
 

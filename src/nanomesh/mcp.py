@@ -32,7 +32,10 @@ INSTRUCTIONS = (
     "on disk and benchmarks measured here. Use it before recommending local models, quantization, runtimes or "
     "training setups: device_passport for what the machine can run, plan_model for which variant of a model "
     "to use (with measured speeds where available), list_local_models for models already downloaded, "
-    "environment_doctor for installation problems, training_plan before fine-tuning."
+    "environment_doctor for installation problems, training_plan before fine-tuning. "
+    "It can also get a model running end to end: search_models (Hugging Face, sized for this machine), "
+    "download_model, benchmark_model, then start_model_server for an OpenAI-compatible endpoint. Downloads and "
+    "benchmarks run as jobs: poll job_status. Always tell the user the download size before downloading."
 )
 
 
@@ -111,13 +114,7 @@ def current_conditions() -> dict:
 def plan_model(model: str, device: str | None = None, context: int = 4096, min_quality: str = "good",
                prefer: str = "balanced") -> dict:
     info, dev = _model(model), _device(device)
-    try:
-        pct = float(str(min_quality).rstrip("%"))
-        req = Requirements(context=context, min_quality_pct=pct, prefer=prefer)
-    except ValueError:
-        if min_quality not in QUALITY_TIERS:
-            raise ToolError(f"min_quality must be a percentage or one of {QUALITY_TIERS}") from None
-        req = Requirements(context=context, min_quality=min_quality, prefer=prefer)
+    req = _requirements(context, min_quality, prefer)
     ev = store.evidence(dev, info)
     p = plan(info, dev, req, ev)
     if dev.is_local:
@@ -145,6 +142,149 @@ def benchmark_results(model: str | None = None) -> dict:
                       "drop_pct": r.sustained.drop_pct, "battery_hours": r.sustained.battery_hours}
         if r.sustained else None,
     }.items() if v is not None} for r in rows[-50:]]}
+
+
+def _requirements(context: int, min_quality: str, prefer: str) -> Requirements:
+    try:
+        return Requirements(context=context, min_quality_pct=float(str(min_quality).rstrip("%")), prefer=prefer)
+    except ValueError:
+        if min_quality not in QUALITY_TIERS:
+            raise ToolError(f"min_quality must be a percentage or one of {QUALITY_TIERS}") from None
+        return Requirements(context=context, min_quality=min_quality, prefer=prefer)
+
+
+def search_models(query: str, limit: int = 5, context: int = 4096, min_quality: str = "good",
+                  prefer: str = "balanced") -> dict:
+    from nanomesh.catalog import CatalogError, search
+
+    try:
+        found = search(query, _local(), limit=min(max(limit, 1), 10), req=_requirements(context, min_quality, prefer))
+    except CatalogError as e:
+        raise ToolError(str(e)) from None
+    return {"device": _local().name, "query": query,
+            "results": [m.model_dump(exclude_none=True) for m in found],
+            "note": "No repository name contains every word; try fewer or different words." if not found else
+                    "recommended is the file to download for this device. Tell the user its download_gb and get "
+                    "their OK, then call download_model(repo, file)."}
+
+
+def download_model(repo: str, file: str | None = None) -> dict:
+    from nanomesh import jobs
+    from nanomesh.catalog import CatalogError
+    from nanomesh.download import download, pull
+
+    try:
+        dp = pull(repo, file, _local())
+    except CatalogError as e:
+        raise ToolError(str(e)) from None
+    info = {"file": dp.file.name, "parts": len(dp.file.parts), "download_gb": dp.file.size_gb,
+            "remaining_gb": dp.remaining_gb, "destination": str(dp.target), "disk_free_gb": dp.disk_free_gb}
+    if dp.remaining_gb == 0 and dp.target.exists():
+        return {**info, "status": "already downloaded", "path": str(dp.target)}
+
+    def run(h: jobs.Handle) -> dict:
+        def progress(done: int, total: int):
+            h.update(done / total if total else None, f"{done / 1024**3:.2f} of {total / 1024**3:.2f} GB")
+        path = download(dp, progress, h.cancel)
+        return {"path": str(path), "next": "benchmark_model(path) to measure it here, or "
+                                           "start_model_server(path) to use it."}
+
+    job = jobs.start("download", f"{repo}/{dp.file.name}", run)
+    return {**info, "job_id": job.id, "status": "started", "next": "Poll job_status(job_id) for progress."}
+
+
+def benchmark_model(path: str, quick: bool = True) -> dict:
+    from nanomesh import jobs
+    from nanomesh.evaluate import evaluate
+    from nanomesh.stress import WARMUP_SECONDS
+    from nanomesh.toolchain import find_toolchain
+
+    f = Path(path).expanduser()
+    if not f.is_file() or f.suffix != ".gguf":
+        raise ToolError(f"Not a .gguf file: {path}")
+    tc = find_toolchain()
+    if not tc.bench:
+        raise ToolError("llama-bench not found; see environment_doctor.")
+    device = _local()
+
+    def run(h: jobs.Handle) -> dict:
+        rows = evaluate(tc, [f], device, quality=False, warmup_s=0 if quick else WARMUP_SECONDS,
+                        log=lambda m: h.update(message=m))
+        store.save(rows)
+        r = rows[0]
+        return {"model": r.model_name, "variant": r.format, "gen_tokens_per_s": r.gen_tokens_per_s,
+                "prompt_tokens_per_s": r.prompt_tokens_per_s, "peak_ram_gb": r.peak_rss_gb,
+                "steady_state": r.steady, "saved": True,
+                "note": "Saved: plan_model and search_models now use this measurement."}
+
+    job = jobs.start("benchmark", f.name, run)
+    minutes = "about 1 minute" if quick else "2-4 minutes (warms the CPU up first)"
+    return {"job_id": job.id, "status": "started", "expected": minutes,
+            "next": "Poll job_status(job_id); ask the user to leave the machine alone meanwhile."}
+
+
+def job_status(job_id: str | None = None) -> dict:
+    from nanomesh import jobs
+
+    if job_id:
+        job = jobs.get(job_id)
+        if job is None:
+            raise ToolError(f"No job {job_id} (jobs are forgotten when the MCP server restarts; downloads resume "
+                            "if started again).")
+        return job.model_dump(exclude_none=True)
+    return {"jobs": [j.model_dump(exclude_none=True) for j in jobs.all_jobs()]}
+
+
+def cancel_job(job_id: str) -> dict:
+    from nanomesh import jobs
+
+    job = jobs.cancel(job_id)
+    if job is None:
+        raise ToolError(f"No job {job_id}.")
+    return {"job_id": job_id, "status": "cancelling" if job.status == "running" else job.status}
+
+
+def _server_summary(srv, state: str | None = None) -> dict:
+    from nanomesh.serve import connect_snippets, health
+
+    return {"model": srv.model, "base_url": srv.base_url, "port": srv.port, "context": srv.context,
+            "threads": srv.threads, "state": state or health(srv.port) or "not responding", "pid": srv.pid,
+            "log": srv.log, "how_to_connect": connect_snippets(srv)}
+
+
+def start_model_server(path: str, port: int = 8080, context: int = 4096) -> dict:
+    from nanomesh.serve import start
+    from nanomesh.toolchain import ToolchainError
+
+    f = Path(path).expanduser()
+    if not f.is_file():
+        raise ToolError(f"No such model file: {path}")
+    # Measured best thread count from `nanomesh tune`, when there is one.
+    threads = store.evidence(_local(), analyze(str(f))).best_threads
+    try:
+        srv, state = start(f, port=port, context=context, threads=threads, wait_s=45)
+    except ToolchainError as e:
+        raise ToolError(str(e)) from None
+    out = _server_summary(srv, state)
+    if state == "loading":
+        out["next"] = "Still loading the model; check model_server_status in a few seconds."
+    return out
+
+
+def model_server_status() -> dict:
+    from nanomesh.serve import running
+
+    servers = running()
+    return {"servers": [_server_summary(s) for s in servers]} if servers else {
+        "servers": [], "note": "No NanoMesh model servers running. start_model_server(path) starts one."}
+
+
+def stop_model_server(port: int | None = None) -> dict:
+    from nanomesh.serve import stop
+
+    stopped = stop(port)
+    return {"stopped": [{"model": s.model, "port": s.port} for s in stopped]} if stopped else {
+        "stopped": [], "note": "Nothing to stop."}
 
 
 def environment_doctor() -> dict:
@@ -204,18 +344,69 @@ TOOLS: dict[str, tuple[Callable[..., dict], str, dict]] = {
          "seq_len": {"type": "integer", "description": "Training sequence length (default 1024)."},
          "batch": {"type": "integer", "description": "Micro-batch size (default 1)."},
          "lora_rank": {"type": "integer", "description": "LoRA rank (default 16)."}}),
+    "search_models": (search_models,
+        "Search Hugging Face for GGUF models and size each one for this machine: which file to download "
+        "(recommended), its download size, memory, predicted speed and quality. Matches repository names, so "
+        "turn tasks into model names: coding -> 'qwen2.5 coder 7b', small chat -> 'llama 3.2 3b', 'phi-3 mini'.",
+        {"query": {"type": "string", "description": "Words that must all appear in the repository name."},
+         "limit": {"type": "integer", "description": "Repositories to return (default 5, max 10)."},
+         "context": {"type": "integer", "description": "Context length in tokens (default 4096)."},
+         "min_quality": {"type": "string", "description": "Minimum quality: a percentage or a tier (default 'good')."},
+         "prefer": {"type": "string", "enum": ["balanced", "quality", "speed", "size"]}}),
+    "download_model": (download_model,
+        "Download a GGUF model from Hugging Face into the models folder, resuming and verifying checksums. "
+        "Runs as a job: returns job_id at once. Tell the user the download size and get their OK first.",
+        {"repo": {"type": "string", "description": "Repository id, e.g. 'Qwen/Qwen2.5-1.5B-Instruct-GGUF'."},
+         "file": {"type": "string", "description": "File name or format (e.g. 'Q4_K_M'); default: NanoMesh's "
+                                                   "recommendation for this machine."}}),
+    "benchmark_model": (benchmark_model,
+        "Measure a GGUF model's speed and memory on this machine with llama.cpp and save it, so plans use real "
+        "numbers. Runs as a job; quick takes ~1 minute, a steady-state run 2-4 minutes.",
+        {"path": {"type": "string", "description": "Path to a .gguf file."},
+         "quick": {"type": "boolean", "description": "Skip the warm-up (default true)."}}),
+    "job_status": (job_status,
+        "Progress and result of a download or benchmark job; all jobs if no id is given.",
+        {"job_id": {"type": "string"}}),
+    "cancel_job": (cancel_job, "Cancel a running download or benchmark job. Downloads resume if started again.",
+        {"job_id": {"type": "string"}}),
+    "start_model_server": (start_model_server,
+        "Serve a GGUF model on this machine as an OpenAI-compatible API at http://127.0.0.1:<port>/v1 "
+        "(llama.cpp's llama-server, local only, using this machine's measured best thread count). Returns the "
+        "endpoint and ready-to-paste snippets for Python, JavaScript, curl and VS Code (Continue). Keeps running "
+        "until stop_model_server.",
+        {"path": {"type": "string", "description": "Path to a .gguf file (from list_local_models or "
+                                                   "download_model)."},
+         "port": {"type": "integer", "description": "Port (default 8080)."},
+         "context": {"type": "integer", "description": "Context length in tokens (default 4096)."}}),
+    "model_server_status": (model_server_status,
+        "Model servers NanoMesh is running, their endpoints and how to connect.", {}),
+    "stop_model_server": (stop_model_server, "Stop a model server NanoMesh started (all if no port is given).",
+        {"port": {"type": "integer"}}),
 }
-REQUIRED = {"plan_model": ["model"], "training_plan": ["model"]}
-# Every tool only reads this machine's state and NanoMesh's own data, so
-# clients such as VS Code can ask the user less often.
-ANNOTATIONS = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}
+REQUIRED = {"plan_model": ["model"], "training_plan": ["model"], "search_models": ["query"],
+            "download_model": ["repo"], "benchmark_model": ["path"], "cancel_job": ["job_id"],
+            "start_model_server": ["path"]}
+# Most tools only read this machine's state and NanoMesh's own data, so
+# clients such as VS Code can ask the user less often. The rest act, and say so.
+READ_ONLY = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}
+ANNOTATIONS = {name: READ_ONLY for name in TOOLS} | {
+    "search_models": READ_ONLY | {"openWorldHint": True},
+    "download_model": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "benchmark_model": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False,
+                        "openWorldHint": False},
+    "cancel_job": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    "start_model_server": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True,
+                           "openWorldHint": False},
+    "stop_model_server": {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True,
+                          "openWorldHint": False},
+}
 
 
 def tool_list() -> list[dict]:
     return [{"name": name, "description": desc,
              "inputSchema": {"type": "object", "properties": props, "required": REQUIRED.get(name, []),
                              "additionalProperties": False},
-             "annotations": {"title": name.replace("_", " ").capitalize(), **ANNOTATIONS}}
+             "annotations": {"title": name.replace("_", " ").capitalize(), **ANNOTATIONS[name]}}
             for name, (_, desc, props) in TOOLS.items()]
 
 
@@ -258,7 +449,11 @@ def handle(message: dict) -> dict | None:
 
 
 def serve(stdin=None, stdout=None) -> None:
-    stdin, stdout = stdin or sys.stdin, stdout or sys.stdout
+    stdin = stdin or sys.stdin
+    if stdout is None:
+        # stdout carries the protocol. Background jobs outlive a tool call's
+        # redirect, so anything else printed from now on goes to stderr.
+        stdout, sys.stdout = sys.stdout, sys.stderr
     for line in stdin:
         if not line.strip():
             continue

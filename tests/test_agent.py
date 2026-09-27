@@ -21,6 +21,7 @@ def _env(**kw):
     base = dict(python="3.11.9", python_path="python", in_virtualenv=True, os="Windows 11", packages={},
                 tools={}, llama_cpp={"llama-bench": "C:/llama.cpp/llama-bench.exe",
                                      "llama-perplexity": "C:/llama.cpp/llama-perplexity.exe",
+                                     "llama-server": "C:/llama.cpp/llama-server.exe",
                                      "llama-quantize": "x", "convert_hf_to_gguf.py": "x"},
                 disk_free_gb=100, findings=[])
     return Environment(**(base | kw))
@@ -157,11 +158,15 @@ def test_mcp_handshake_and_tool_list():
     assert init["result"]["serverInfo"]["name"] == "nanomesh"
     names = {t["name"] for t in tools["result"]["tools"]}
     assert names == {"device_passport", "current_conditions", "plan_model", "list_local_models",
-                     "benchmark_results", "environment_doctor", "training_plan"}
+                     "benchmark_results", "environment_doctor", "training_plan", "search_models",
+                     "download_model", "benchmark_model", "job_status", "cancel_job", "start_model_server",
+                     "model_server_status", "stop_model_server"}
     assert all(t["inputSchema"]["type"] == "object" for t in tools["result"]["tools"])
-    # Nothing changes the machine: clients may skip the confirmation prompt.
-    assert all(t["annotations"]["readOnlyHint"] and not t["annotations"]["destructiveHint"]
-               for t in tools["result"]["tools"])
+    # Only tools that act are marked as such, so clients confirm those and not the rest.
+    acting = {t["name"] for t in tools["result"]["tools"] if not t["annotations"]["readOnlyHint"]}
+    assert acting == {"download_model", "benchmark_model", "cancel_job", "start_model_server", "stop_model_server"}
+    online = {t["name"] for t in tools["result"]["tools"] if t["annotations"]["openWorldHint"]}
+    assert online == {"search_models", "download_model"}
 
 
 def test_mcp_unknown_version_gets_latest():

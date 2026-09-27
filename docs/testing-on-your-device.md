@@ -91,6 +91,23 @@ Then **unplug** and run `sustained` again (5 minutes gives a better battery read
 run measures battery draw, energy per token and hours of generation on a full charge. Open
 `nanomesh dashboard` > Benchmarks to see the speed-over-time chart.
 
+## 8. Search, download and serve
+
+```sh
+nanomesh search qwen2.5 1.5b                      # which file suits this laptop, and how fast it'll be
+nanomesh pull Qwen/Qwen2.5-0.5B-Instruct-GGUF     # a small one to try: asks before downloading
+nanomesh serve C:\models\Qwen2.5-0.5B-Instruct-GGUF\<file>.gguf
+nanomesh serve --status
+nanomesh serve --stop
+```
+
+`serve` needs `llama-server`, which is in the same llama.cpp release as `llama-bench`. While it
+runs, paste the PowerShell snippet it prints to get a reply from the model.
+
+To do it from VS Code instead, restart the NanoMesh MCP server and ask Copilot (Agent mode):
+*"Find a small chat model for this laptop, download it and start it."* It should search, tell you
+the download size, and ask before downloading and starting the server.
+
 ## Android (Termux)
 
 NanoMesh runs inside [Termux](https://termux.dev) (install it from F-Droid; the
