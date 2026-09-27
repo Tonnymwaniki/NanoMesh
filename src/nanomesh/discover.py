@@ -30,6 +30,8 @@ class FoundModel(BaseModel):
     format: str | None = None  # GGUF quantization, e.g. Q4_K_M
     params: int
     size_gb: float
+    parts: int = 1  # split GGUFs: how many files make up the model
+    missing_parts: int = 0  # parts not on disk: llama.cpp can't load it until they're downloaded
     fits: bool  # does this exact file fit the device's memory budget?
     recommended: str | None = None  # best variant of this model for the device
     recommended_note: str | None = None
@@ -99,8 +101,10 @@ def _describe(name: str, path: Path, source: str, device: DeviceProfile, context
         info = _analyze_gguf(gguf_parts(path)[0]) if is_gguf else analyze(str(path))
     except (ValueError, OSError, KeyError, struct.error, UnicodeDecodeError):
         return None
-    fmt, size = None, (info.disk_bytes or 0)
+    fmt, size, parts, missing = None, (info.disk_bytes or 0), 1, 0
     if is_gguf:
+        parts = len(gguf_parts(path))
+        missing = sum(not p.is_file() for p in gguf_parts(path))
         meta, _ = read_gguf(gguf_parts(path)[0])
         fmt, size = gguf_format(meta, path), gguf_size(path)
     budget = max(b.memory_gb for b in memory_budgets(device))
@@ -109,7 +113,7 @@ def _describe(name: str, path: Path, source: str, device: DeviceProfile, context
     rec = next((v for v in p.variants if v.format.name == p.recommended), None)
     return FoundModel(
         name=name, path=str(path), source=source, kind="gguf" if is_gguf else "safetensors", format=fmt,
-        params=info.params, size_gb=round(size / GB, 2), fits=size / GB + kv + 0.3 <= budget,
+        params=info.params, size_gb=round(size / GB, 2), parts=parts, missing_parts=missing, fits=size / GB + kv + 0.3 <= budget,
         recommended=p.recommended,
         recommended_note=(f"{rec.format.label} · {rec.total_memory_gb:.1f} GB"
                           + (f" · {rec.tokens_per_s:g} tok/s" if rec and rec.tokens_per_s else "")) if rec else

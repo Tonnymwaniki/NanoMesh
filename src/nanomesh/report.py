@@ -331,9 +331,12 @@ def models_view(found, device_name: str) -> Table | Text:
     for col in ("Model", "Source", "Type", "Size", "Fits", "Best variant here"):
         t.add_column(col, overflow="fold")
     for m in found:
-        kind = m.format or m.kind
-        t.add_row(m.name, m.source, kind, f"{m.size_gb:g} GB", Text("yes", style="green") if m.fits else
-                  Text("no", style="red"), m.recommended_note or "—")
+        kind = (m.format or m.kind) + (f" · {m.parts} parts" if m.parts > 1 else "")
+        if m.missing_parts:
+            fits = Text(f"{m.missing_parts} part(s) missing", style="red")
+        else:
+            fits = Text("yes", style="green") if m.fits else Text("no", style="red")
+        t.add_row(m.name, m.source, kind, f"{m.size_gb:g} GB", fits, m.recommended_note or "—")
     return t
 
 
