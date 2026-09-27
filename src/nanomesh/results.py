@@ -57,6 +57,11 @@ class Result(BaseModel):
     steady: bool = False
     warmup_s: float | None = None
     burst_tokens_per_s: float | None = None  # speed when started cold (turbo)
+    # Where continuous generation settled during the warm-up, and when speed
+    # dropped. Compared with gen_tokens_per_s it shows whether llama-bench's
+    # pauses (model load, prompt) let a laptop's turbo budget recover.
+    warmup_settled_tokens_per_s: float | None = None
+    warmup_drop_at_s: float | None = None
     conditions: RunConditions | None = None
     sustained: SustainedRun | None = None
 

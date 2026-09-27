@@ -64,6 +64,8 @@ def evaluate(tc: Toolchain, files: list[Path], device: DeviceProfile, *, quality
             steady=warm is not None, warmup_s=warm.seconds if warm else None,
             # Only a cold start shows the turbo speed; later files start warm.
             burst_tokens_per_s=warm.burst_tokens_per_s if warm and i == 0 else None,
+            warmup_settled_tokens_per_s=warm.settled_tokens_per_s if warm else None,
+            warmup_drop_at_s=warm.drop_at_s if warm else None,
         ))
 
     if quality:

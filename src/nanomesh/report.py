@@ -167,7 +167,9 @@ def bench_table(results: list[Result]) -> Table:
     steady = any(r.steady for r in results)
     burst = any(r.burst_tokens_per_s for r in results)
     t.title = "Measured on this machine · speeds in tok/s" + (" · steady state" if steady else "")
-    cols = ["Variant", "Size", "Prompt", "Generate"] + (["Cold start"] if burst else []) + ["Peak RAM", "Quality"]
+    warmed = any(r.warmup_settled_tokens_per_s for r in results)
+    cols = ["Variant", "Size", "Prompt", "Generate"] + (["Cold"] if burst else []) + (["Warm-up"] if warmed else []) \
+        + ["Peak RAM", "Quality"]
     for col in cols:
         t.add_column(col, no_wrap=True, min_width=6 if col == "Variant" else None)
 
@@ -179,9 +181,12 @@ def bench_table(results: list[Result]) -> Table:
         row = [r.format or r.model_name, _fmt_gb(r.file_size_gb), num(r.prompt_tokens_per_s), num(r.gen_tokens_per_s)]
         if burst:
             row.append(num(r.burst_tokens_per_s) if r.burst_tokens_per_s else "")
+        if warmed:
+            row.append(num(r.warmup_settled_tokens_per_s) if r.warmup_settled_tokens_per_s else "")
         t.add_row(*row, _fmt_gb(r.peak_rss_gb), q)
-    if burst:
-        t.caption = "Cold start: the first seconds from idle, when laptops boost. Steady: what long sessions get."
+    if burst or warmed:
+        t.caption = ("Generate: llama-bench after warming up. Cold: the first seconds from idle, when laptops boost. "
+                     "Warm-up: where continuous generation settled before measuring.")
     return t
 
 
