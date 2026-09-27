@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+from nanomesh.conditions import Sampler
 from nanomesh.hardware import GB, DeviceProfile
 from nanomesh.model import analyze, gguf_size, read_gguf
 from nanomesh.planner import FORMATS, memory_budgets
@@ -34,14 +35,15 @@ def evaluate(tc: Toolchain, files: list[Path], device: DeviceProfile, *, quality
     results = []
     for f in files:
         log(f"Benchmarking {f.name}…")
-        bench = benchmark_gguf(tc, f, threads)
+        with Sampler() as sampler:
+            bench = benchmark_gguf(tc, f, threads)
         info = analyze(str(f))
         results.append(Result(
             timestamp=now(), device_key=device.key, device_name=device.name,
             model_name=info.name, model_params=info.params, model_architecture=info.architecture,
             format=_format(f), file_size_gb=bench.size_gb, prompt_tokens_per_s=bench.prompt_tokens_per_s,
             gen_tokens_per_s=bench.gen_tokens_per_s, peak_rss_gb=bench.peak_rss_gb,
-            backend=bench.backend, threads=bench.threads,
+            backend=bench.backend, threads=bench.threads, conditions=sampler.summary(),
         ))
 
     if quality:

@@ -7,13 +7,15 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from nanomesh.hardware import DeviceProfile, compute_class
-from nanomesh.model import ModelInfo, analyze
-from nanomesh.planner import Plan, Requirements, Variant, memory_budgets, max_practical_params, plan
-from nanomesh.results import Result, evidence
+from nanomesh.conditions import Conditions
+from nanomesh.conditions import advice as condition_advice
+from nanomesh.hardware import DeviceProfile
+from nanomesh.model import ModelInfo
+from nanomesh.passport import passport
+from nanomesh.planner import Plan, Variant
+from nanomesh.results import Result
 
 QUALITY_STYLE = {"lossless": "green", "high": "green", "good": "cyan", "fair": "yellow", "severe": "red"}
-REFERENCE_SIZES = ["1b", "3b", "7b", "13b", "32b", "70b"]
 
 
 def _fmt_gb(gb: float | None) -> str:
@@ -58,36 +60,29 @@ def device_passport(device: DeviceProfile) -> Panel:
         if v:
             spec.add_row(k, str(v))
 
-    budget = max(b.memory_gb for b in memory_budgets(device))
-    comfy = max_practical_params(budget * 0.75, 4096)
-    limit = max_practical_params(budget, 4096)
+    pp = passport(device)
     fit = Text()
-    fit.append(f"\nAI COMPUTE CLASS  {compute_class(device)}\n", style="bold magenta")
-    fit.append(f"Model memory budget ~{budget:.1f} GB\n\n")
-    fit.append(f"🟢 Recommended  up to ~{comfy}B params (INT4)\n", style="green")
-    fit.append(f"🟡 Possible     ~{comfy}B – {limit}B params (INT4, tight)\n", style="yellow")
-    fit.append(f"🔴 Not advised  above ~{limit}B params\n", style="red")
+    fit.append(f"\nAI COMPUTE CLASS  {pp.compute_class}\n", style="bold magenta")
+    fit.append(f"Model memory budget ~{pp.budget_gb:.1f} GB\n\n")
+    fit.append(f"🟢 Recommended  up to ~{pp.recommended_max_b}B params (INT4)\n", style="green")
+    fit.append(f"🟡 Possible     ~{pp.recommended_max_b}B – {pp.possible_max_b}B params (INT4, tight)\n", style="yellow")
+    fit.append(f"🔴 Not advised  above ~{pp.possible_max_b}B params\n", style="red")
 
     sizes = Table(title="What fits (4K context)", title_justify="left", box=None, header_style="bold")
     for col in ("Model size", "Best variant", "Memory", "Speed", "Runs on"):
         sizes.add_column(col)
-    for size in REFERENCE_SIZES:
-        model = analyze(size)
-        # Device-level calibration applies; per-model measurements don't (these are generic sizes).
-        ev = evidence(device, model).model_copy(update={"speeds": {}, "quality": {}})
-        p = plan(model, device, Requirements(min_quality="fair"), ev)
-        v = next((x for x in p.variants if x.format.name == p.recommended), None)
-        if v:
-            sizes.add_row(size.upper(), Text(v.format.label, style=QUALITY_STYLE[v.quality]),
-                          f"{v.total_memory_gb:.1f} GB", _fmt_speed(v.tokens_per_s, v.speed_source), v.placement or "")
+    for f in pp.fits:
+        if f.fits:
+            sizes.add_row(f.size, Text(f.label, style=QUALITY_STYLE[f.quality]), f"{f.memory_gb:.1f} GB",
+                          _fmt_speed(f.tokens_per_s, f.speed_source), f.placement or "")
         else:
-            sizes.add_row(size.upper(), Text("won't fit", style="red"), "", "", "")
+            sizes.add_row(f.size, Text("won't fit", style="red"), "", "", "")
 
     notes = Text(f"\n{device.notes}", style="dim") if device.notes else Text("")
-    if device.is_local and device.available_ram_gb is not None and device.available_ram_gb < budget * 0.5:
+    if pp.low_free_ram:
         notes.append(f"\n⚠ Only {device.available_ram_gb:g} GB of RAM is free right now. The table assumes "
                      "you close other apps (especially browsers) before running a model.", style="yellow")
-    if device.is_local and not device.matched_id:
+    if pp.unrecognised:
         notes.append("\nThis exact model isn't in the NanoMesh database yet, so speeds are unknown until you run "
                      "`nanomesh benchmark`.", style="dim")
     return Panel(Group(spec, fit, sizes, notes), title=f"[bold]DEVICE PASSPORT · {device.name}",
@@ -189,4 +184,93 @@ def results_table(results: list[Result]) -> Table:
         t.add_row(r.timestamp[:16].replace("T", " "), r.device_name, f"{r.model_name} ({size})", r.format or "?",
                   f"{r.gen_tokens_per_s:g} tok/s" if r.gen_tokens_per_s else "—", _fmt_gb(r.peak_rss_gb),
                   f"{r.quality_pct:g}%" if r.quality_pct is not None else "—")
+    return t
+
+
+def conditions_view(c: Conditions) -> Panel:
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold")
+    grid.add_column()
+    power = None
+    if c.on_battery is not None:
+        power = "On battery" if c.on_battery else "Plugged in"
+        if c.battery_pct is not None:
+            power += f" · {c.battery_pct:g}%"
+    rows = [
+        ("Power", power),
+        ("Power plan", " · ".join(x for x in (c.power_plan, c.power_mode) if x) or None),
+        ("CPU speed", f"{c.clock_pct:g}% of rated" if c.clock_pct is not None else (f"{c.cpu_mhz:g} MHz" if c.cpu_mhz else None)),
+        ("CPU temperature", f"{c.temp_c:g}°C" if c.temp_c is not None else "not readable on this system"),
+        ("CPU busy", f"{c.cpu_load_pct:g}%" if c.cpu_load_pct is not None else None),
+        ("Free RAM", f"{c.available_ram_gb:g} GB" if c.available_ram_gb is not None else None),
+        ("Battery draw", f"{c.discharge_w:g} W" if c.discharge_w else None),
+        ("Battery health", f"{c.battery_full_wh:g} of {c.battery_design_wh:g} Wh "
+                           f"({round(100 * c.battery_full_wh / c.battery_design_wh)}%)"
+                           if c.battery_full_wh and c.battery_design_wh else None),
+    ]
+    for k, v in rows:
+        if v:
+            grid.add_row(k, v)
+    notes = Text()
+    for a in condition_advice(c):
+        notes.append(f"\n→ {a}", style="yellow")
+    if not notes:
+        notes.append("\n✓ Nothing in the current conditions should slow a model down.", style="green")
+    return Panel(Group(grid, notes), title="[bold]RIGHT NOW", border_style="cyan")
+
+
+def sustained_view(r: Result) -> Panel:
+    s = r.sustained
+    t = Text()
+    t.append(f"{s.burst_tokens_per_s:g} → {s.sustained_tokens_per_s:g} tok/s", style="bold")
+    t.append(f"  ({s.drop_pct:g}% slower after {s.points[-1].t_s / 60:.1f} min)")
+    rc = r.conditions
+    if rc and rc.temp_max_c is not None:
+        t.append(f"\nHottest: {rc.temp_max_c:g}°C")
+    if rc and rc.clock_pct_min is not None:
+        t.append(f"\nSlowest CPU clock: {rc.clock_pct_min:g}% of rated")
+    if s.watts:
+        t.append(f"\nBattery draw {s.watts:g} W · {s.joules_per_token:g} J per token")
+    if s.battery_hours:
+        t.append(f"\nA full battery lasts ~{s.battery_hours:g} h of continuous generation")
+        if s.battery_hours_range:
+            lo, hi = s.battery_hours_range
+            t.append(f" (somewhere between {lo:g} and {hi:g} h)")
+    if s.tokens_per_battery_pct:
+        t.append(f"\n~{s.tokens_per_battery_pct:,} tokens per 1% of battery")
+    if s.energy_source == "battery %":
+        t.append("\nRough: measured from the battery percentage, which only moves in 1% steps. "
+                 "A 15-minute run narrows it.", style="dim")
+    elif s.energy_source:
+        t.append(f"\nMeasured with the battery's {s.energy_source}.", style="dim")
+    if rc and rc.start.on_battery is False:
+        t.append("\nPlugged in: unplug and run again to measure battery life and energy per token.", style="dim")
+    if s.drop_pattern == "step":
+        t.append(f"\nSudden drop at {int(s.drop_at_s // 60)}:{int(s.drop_at_s % 60):02d}: the CPU's short-term turbo "
+                 "budget ran out (typical of Intel laptops). Long sessions run at the lower speed; quick benchmarks "
+                 "taken in the first minute overstate it.")
+    elif s.drop_pattern == "gradual":
+        t.append(f"\nSpeed slid down gradually from {int(s.drop_at_s // 60)}:{int(s.drop_at_s % 60):02d} as the "
+                 "device heated up. Better airflow helps.")
+    if s.points[-1].t_s < 60:
+        t.append("\nThis run was under a minute: run at least 3 minutes (the default) for a reliable reading.",
+                 style="yellow")
+        return Panel(t, title=f"[bold]SUSTAINED · {r.model_name} {r.format}", border_style="cyan")
+    verdict = ("green", "Speed held steady.") if s.drop_pct < 10 else \
+        ("yellow", "Noticeable slowdown under sustained load.") if s.drop_pct < 25 else \
+        ("red", "Heavy throttling: long sessions run much slower than a quick test suggests.")
+    t.append(f"\n{verdict[1]}", style=verdict[0])
+    return Panel(t, title=f"[bold]SUSTAINED · {r.model_name} {r.format}", border_style="cyan")
+
+
+def threads_view(rows: list[Result], default_threads: int | None) -> Table:
+    best = max(rows, key=lambda r: r.gen_tokens_per_s)
+    t = Table(title=f"Thread counts · {rows[0].model_name} {rows[0].format}", header_style="bold", title_justify="left")
+    for col in ("Threads", "Generate", ""):
+        t.add_column(col)
+    top = best.gen_tokens_per_s
+    for r in sorted(rows, key=lambda r: r.threads):
+        bar = "█" * max(1, round(24 * r.gen_tokens_per_s / top))
+        tags = " ".join(x for x in ("🏆 fastest" if r is best else "", "(llama.cpp default)" if r.threads == default_threads else "") if x)
+        t.add_row(str(r.threads), f"{r.gen_tokens_per_s:g} tok/s", Text(f"{bar} {tags}", style="green" if r is best else "blue"))
     return t

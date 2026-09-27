@@ -77,6 +77,20 @@ Results are saved to `~/.nanomesh/results.jsonl`; view them with `nanomesh resul
 Send `~/.nanomesh/results.jsonl` together with the output of both `plan` runs.
 The gap between predicted and measured numbers is exactly what needs tuning next.
 
+## 7. Heat, battery and threads
+
+Plug the laptop in, close other apps, then:
+
+```sh
+nanomesh scan-device                                   # check the "Right now" panel
+nanomesh tune C:\models\qwen1.5b\qwen2.5-1.5b-instruct-q4_k_m.gguf
+nanomesh sustained C:\models\qwen1.5b\qwen2.5-1.5b-instruct-q4_k_m.gguf --minutes 3
+```
+
+Then **unplug** and run `sustained` again (5 minutes gives a better battery reading). The second
+run measures battery draw, energy per token and hours of generation on a full charge. Open
+`nanomesh dashboard` > Benchmarks to see the speed-over-time chart.
+
 ## Android (Termux)
 
 NanoMesh runs inside [Termux](https://termux.dev) (install it from F-Droid; the

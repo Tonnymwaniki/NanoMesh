@@ -1,5 +1,7 @@
 # NanoMesh
 
+[![tests](https://github.com/Tonnymwaniki/NanoMesh/actions/workflows/tests.yml/badge.svg)](https://github.com/Tonnymwaniki/NanoMesh/actions/workflows/tests.yml)
+
 **Give NanoMesh a model and a device; it finds the best way to run that model there.**
 
 Quantization itself is a solved problem: llama.cpp, Olive, AIMET and others already do it well.
@@ -29,6 +31,32 @@ Windows, Linux, macOS and Android (via Termux) are supported; see
 [docs/testing-on-your-device.md](docs/testing-on-your-device.md) for a step-by-step walkthrough.
 
 ## Usage
+
+### Conditions, heat, battery and threads
+
+`nanomesh scan-device` ends with a **Right now** panel: power source and battery, power plan and
+power mode, CPU speed relative to its rating, temperature (Linux, Android and some laptops; Windows
+usually hides it), background CPU load and battery health, plus what to change.
+
+```sh
+nanomesh sustained model.gguf --minutes 3   # speed over minutes: thermal slowdown
+nanomesh tune model.gguf                    # fastest CPU thread count for this machine
+```
+
+`sustained` keeps generating and reports burst vs sustained speed. Unplugged, it also measures
+battery draw, energy per token and how many hours of generation a full charge gives. `tune` tries
+several thread counts; on CPUs with hyper-threading the default is often not the fastest. Both
+feed `nanomesh plan`'s advice.
+
+### Dashboard
+
+```sh
+nanomesh dashboard
+```
+
+Opens a local web dashboard in your browser: your Device Passport, everything you've measured,
+an interactive planner for any model and device, and the device database. It runs on
+`127.0.0.1` only, needs no internet connection, and your data never leaves the machine.
 
 ### Device Passport: what can this machine run?
 
@@ -123,6 +151,10 @@ nanomesh benchmark ./models/qwen1.5b/            # every .gguf in the folder
 nanomesh benchmark model-Q4_K_M.gguf --reference model-F16.gguf
 nanomesh results                                  # everything measured on this machine
 ```
+
+Every benchmark also records the conditions it ran under: plugged in or on battery, power mode,
+CPU speed and temperature where the system reports them. Calibration prefers plugged-in runs,
+because laptops slow down on battery.
 
 For each file, `benchmark` measures prompt/generation speed and peak RAM (`llama-bench`)
 and quality: perplexity relative to the highest-precision variant that fits in memory

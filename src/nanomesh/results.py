@@ -17,9 +17,10 @@ from statistics import median
 from pydantic import BaseModel
 
 from nanomesh import __version__
+from nanomesh.conditions import RunConditions
 from nanomesh.hardware import DeviceProfile
 from nanomesh.model import ModelInfo
-from nanomesh.planner import FORMATS_BY_NAME, Evidence
+from nanomesh.planner import FORMATS_BY_NAME, BatteryCost, Evidence
 
 # llama.cpp's llama_ftype values for the formats NanoMesh builds.
 GGUF_FILE_TYPES = {0: "F32", 1: "F16", 7: "Q8_0", 10: "Q2_K", 12: "Q3_K_M", 15: "Q4_K_M",
@@ -48,6 +49,44 @@ class Result(BaseModel):
     perplexity: float | None = None
     reference_format: str | None = None
     quality_pct: float | None = None
+    # "benchmark" (llama-bench defaults), "sustained" (minutes of generation) or
+    # "threads" (one row of a thread-count sweep).
+    kind: str = "benchmark"
+    conditions: RunConditions | None = None
+    sustained: SustainedRun | None = None
+
+    @property
+    def on_battery(self) -> bool:
+        return bool(self.conditions and self.conditions.on_battery_any)
+
+
+class SustainedPoint(BaseModel):
+    t_s: float
+    tokens_per_s: float
+    temp_c: float | None = None
+    clock_pct: float | None = None
+    battery_pct: float | None = None
+    discharge_w: float | None = None
+    battery_wh: float | None = None
+
+
+class SustainedRun(BaseModel):
+    """Generation kept up for minutes: what heat and power limits do to speed."""
+
+    points: list[SustainedPoint]
+    burst_tokens_per_s: float
+    sustained_tokens_per_s: float
+    drop_pct: float
+    watts: float | None = None  # battery draw while generating
+    joules_per_token: float | None = None
+    battery_hours: float | None = None  # full charge at this load
+    tokens_per_battery_pct: float | None = None
+    drop_at_s: float | None = None  # when speed fell halfway to its sustained level
+    drop_pattern: str | None = None  # "step" (turbo budget ran out) or "gradual" (heat)
+    # How the battery figures were measured: "power sensor", "charge counter"
+    # (remaining Wh falling) or "battery %" (1% steps: rough on short runs).
+    energy_source: str | None = None
+    battery_hours_range: tuple[float, float] | None = None
 
 
 def home() -> Path:
@@ -120,8 +159,15 @@ MIN_TYPICAL_LOSS = 1.0
 def evidence(device: DeviceProfile, model: ModelInfo, results: list[Result] | None = None) -> Evidence:
     """Collect what's been measured on this device, for this model and overall."""
     results = [r for r in (load() if results is None else results) if r.device_key == device.key]
+    battery_cost = _battery_cost(results)
+    # Laptops slow down on battery, so plugged-in runs are the reference: when
+    # both exist, only plugged-in runs count.
+    if any(r.on_battery for r in results) and not all(r.on_battery for r in results):
+        results = [r for r in results if not r.on_battery]
     speeds, quality, params = {}, {}, None
     for r in results:  # later results overwrite earlier ones
+        if r.kind != "benchmark":
+            continue  # thread sweeps and sustained runs aren't default-settings speeds
         if r.format and _same_model(r, model):
             params = r.model_params
             if r.gen_tokens_per_s:
@@ -134,7 +180,7 @@ def evidence(device: DeviceProfile, model: ModelInfo, results: list[Result] | No
     # best run shows what the device can deliver. Runs well below that were
     # compute-bound: the CPU couldn't unpack the weights any faster.
     runs = [(r.gen_tokens_per_s * r.file_size_gb * GIB_TO_GB, r.gen_tokens_per_s * r.model_params / 1e9)
-            for r in results if r.gen_tokens_per_s and r.file_size_gb >= 0.05]
+            for r in results if r.gen_tokens_per_s and r.file_size_gb >= 0.05 and r.kind == "benchmark"]
     bandwidth = max((bw for bw, _ in runs), default=None)
     # Every run proves the CPU manages at least tok/s x params, so the ceiling
     # is the best any run achieved (a 7B model gets more out of the CPU than a
@@ -143,11 +189,47 @@ def evidence(device: DeviceProfile, model: ModelInfo, results: list[Result] | No
     cpu_bound = any(bw < bandwidth * COMPUTE_BOUND_BELOW for bw, _ in runs)
     compute = max(c for _, c in runs) if cpu_bound else None
 
+    threads, gain = _best_threads(results, device)
+    sustained_runs = [r.sustained for r in results if r.kind == "sustained" and r.sustained]
+
     return Evidence(speeds=speeds, quality=quality, model_params=params,
+                    best_threads=threads, best_threads_gain_pct=gain, battery_cost=battery_cost,
+                    sustained_drop_pct=sustained_runs[-1].drop_pct if sustained_runs else None,
                     effective_bandwidth_gbps=round(bandwidth, 1) if bandwidth else None,
                     compute_gparams_per_s=round(compute, 1) if compute else None,
                     quality_loss_scale=_quality_loss_scale(quality),
                     calibration_runs=len(runs))
+
+
+def _battery_cost(results: list[Result]) -> BatteryCost | None:
+    """Compare the latest sustained runs of one model plugged in vs on battery."""
+    runs = [r for r in results if r.kind == "sustained" and r.sustained and r.conditions
+            and r.conditions.start.on_battery is not None]
+    for model in {(r.model_name, r.format) for r in reversed(runs)}:
+        mine = [r for r in runs if (r.model_name, r.format) == model]
+        plugged = next((r for r in reversed(mine) if not r.on_battery), None)
+        battery = next((r for r in reversed(mine) if r.on_battery), None)
+        if plugged and battery:
+            p, b = plugged.sustained, battery.sustained
+            return BatteryCost(model=f"{model[0]} {model[1]}",
+                               plugged_burst=p.burst_tokens_per_s, plugged_sustained=p.sustained_tokens_per_s,
+                               battery_burst=b.burst_tokens_per_s, battery_sustained=b.sustained_tokens_per_s)
+    return None
+
+
+def _best_threads(results: list[Result], device: DeviceProfile) -> tuple[int | None, float | None]:
+    """Best thread count from the latest `nanomesh tune` sweep on this device,
+    and its gain over llama.cpp's default (one thread per physical core)."""
+    sweep = [r for r in results if r.kind == "threads" and r.threads and r.gen_tokens_per_s]
+    if not sweep:
+        return None, None
+    latest = [r for r in sweep if (r.model_name, r.format, r.timestamp) == (sweep[-1].model_name, sweep[-1].format, sweep[-1].timestamp)]
+    best = max(latest, key=lambda r: r.gen_tokens_per_s)
+    default_threads = device.physical_cores or max(r.threads for r in latest)
+    baseline = next((r for r in latest if r.threads == default_threads), None)
+    if baseline is None or baseline is best:
+        return best.threads, None
+    return best.threads, round(100 * (best.gen_tokens_per_s / baseline.gen_tokens_per_s - 1), 1)
 
 
 def _quality_loss_scale(quality: dict[str, float]) -> float | None:
