@@ -180,8 +180,12 @@ def search_models(query: str = "", limit: int = 5, context: int = 4096, min_qual
             found = search_task(query, task, _local(), limit=min(max(limit, 1), 10), sources=sources)
         except CatalogError as e:
             raise ToolError(str(e)) from None
+        from nanomesh.catalog import runs_well_hint
+
+        hint = runs_well_hint(found, task, _local())
         return {"device": _local().name, "task": task, "query": query,
                 "results": [r.model_dump(exclude_none=True) for r in found],
+                **({"runs_well_here": hint} if hint else {}),
                 "note": "Each result's card is its Fit Card on this machine. fit_card(model) explains one in "
                         "detail; for vision/speech, download the file the card's 'how' names."}
 

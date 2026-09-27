@@ -333,3 +333,23 @@ def test_a_slow_family_points_to_another_that_runs_well():
     # RT-DETR is too heavy for this laptop's CPU; YOLO11 does the same task well.
     c = fit("PekingU/rtdetr_v2_r18vd", get_device("hp-elitebook-840-g6"))
     assert c.usable is False and c.alternative.startswith("Runs well here instead: yolo11n")
+
+
+def test_detection_search_points_to_a_model_that_runs_well():
+    from nanomesh.catalog import runs_well_hint
+
+    # Shaped like the real top detection results: transformers too slow for a laptop CPU, or unknown.
+    listing = [{"id": "PaddlePaddle/PP-DocLayoutV3_safetensors", "downloads": 1_078_722},
+               {"id": "PekingU/rtdetr_r101vd_coco_o365", "downloads": 896_124}]
+    infos = {"PaddlePaddle/PP-DocLayoutV3_safetensors": {"safetensors": {"total": 30_000_000}}}
+    elitebook = get_device("hp-elitebook-840-g6")
+    found = catalog.search_task("", "detection", elitebook, fetch=fake_fetch(listing, infos))
+    assert not any(r.card.usable for r in found)
+    assert runs_well_hint(found, "detection", elitebook).startswith("yolo11n")
+
+
+def test_fine_tuned_models_say_their_size_is_a_guess():
+    c = fit("morsetechlab/yolov11-license-plate-detection", get_device("hp-elitebook-840-g6"))
+    assert "doesn't say which yolo11 size" in c.notes[0] and "model card" in c.notes[0]
+    official = fit("Ultralytics/YOLO11", get_device("hp-elitebook-840-g6"))
+    assert "comes in several sizes" in official.notes[0]

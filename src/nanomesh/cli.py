@@ -583,8 +583,8 @@ def search_cmd(
         if as_json:
             console.print_json(data=[r.model_dump(exclude_none=True) for r in found])
         else:
-            from nanomesh.catalog import task_name
-            console.print(task_search_view(found, task_name(task), device.name))
+            from nanomesh.catalog import runs_well_hint, task_name
+            console.print(task_search_view(found, task_name(task), device.name, runs_well_hint(found, task, device)))
         return
     with console.status("Searching Hugging Face…"):
         try:

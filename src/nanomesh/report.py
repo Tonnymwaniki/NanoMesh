@@ -499,7 +499,8 @@ def fit_card_view(c) -> Panel:
                  border_style="green" if c.fits and c.usable else "yellow")
 
 
-def task_search_view(found, task: str, device_name: str) -> Group | Text:
+def task_search_view(found, task: str, device_name: str, hint: str | None = None) -> Group | Text:
+    """hint: a model known to run well here, shown when none of the results does."""
     if not found:
         return Text(f"No {task} models found for that search. Try fewer words, or none to see the most popular.",
                     style="yellow")
@@ -515,4 +516,7 @@ def task_search_view(found, task: str, device_name: str) -> Group | Text:
         t.add_row(name, r.source, f"{r.downloads:,}" if r.downloads is not None else "—", fits, speed,
                   f"{c.memory_gb:g} GB" if c.memory_gb is not None else "—",
                   _size(c.download_gb) if c.download_gb else "—", c.license or "—")
-    return Group(t, Text("Details for one: nanomesh fit <model>", style="dim"))
+    footer = [Text("Details for one: nanomesh fit <model>", style="dim")]
+    if hint:
+        footer.insert(0, Text(f"None of these is known to run well here. Runs well: {hint}", style="yellow"))
+    return Group(t, *footer)

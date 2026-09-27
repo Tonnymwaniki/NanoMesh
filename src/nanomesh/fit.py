@@ -451,7 +451,7 @@ def fit(name: str, device: DeviceProfile, *, download_bytes: int | None = None, 
     c = _fit(name, device, download_bytes=download_bytes, license=license, task=task, params=params)
     if c and (why := cannot_run(name, tags, device)):
         c.fits = False
-        c.notes = [n for n in c.notes if "best fit" not in n]
+        c.notes = [n for n in c.notes if "several sizes" not in n and "doesn't say which" not in n]
         c.notes.insert(0, f"Can't run on {device.name}: {why}. Look for its GGUF, ONNX or original version.")
     return c
 
@@ -469,10 +469,25 @@ def _fit(name: str, device: DeviceProfile, *, download_bytes: int | None = None,
         c = card(fam, chosen, device, name=name if member else f"{name} → {display(fam, chosen)}",
                  download_bytes=size if member else None, license=license)
         if not member:
-            c.notes.insert(0, f"'{name}' has several sizes: this is the best fit for {device.name}.")
+            official = re.search(rf"(^|/){re.escape(fam.series)}$|^{re.escape(fam.series)}", name.lower().replace(
+                "ultralytics/", "").replace("openai/", ""))
+            c.notes.insert(0, f"'{name}' comes in several sizes: this is the best fit for {device.name}." if official
+                           else f"'{name}' doesn't say which {fam.series} size it is: estimated as {display(fam, chosen)}"
+                                ", the best fit here. Check its model card.")
         return c
     if task in (None, "text generation", "text-generation"):
         return text_card(name, device, download_bytes=download_bytes, license=license)
     if task in GENERIC and params:
         return generic_card(name, task, params, device, download_bytes=download_bytes, license=license)
+    return None
+
+
+def runs_well(task: str, device: DeviceProfile) -> str | None:
+    """The best-known model for a task that runs well on this device, as a hint."""
+    for fam in FAMILIES:
+        if fam.task == task:
+            m = best(fam, device)
+            rate, _ = speed(fam, m, device)
+            if rate and rate >= fam.usable:
+                return f"{display(fam, m)} ({rate:g} {fam.unit}, {m.quality})"
     return None

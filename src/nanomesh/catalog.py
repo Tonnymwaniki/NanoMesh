@@ -326,3 +326,12 @@ def search_task(query: str, task: str, device: DeviceProfile, *, limit: int = 5,
     # Fits and fast enough first, then the most downloaded.
     out.sort(key=lambda r: (not r.card.fits, r.card.usable is False, -(r.downloads or 0)))
     return out[:limit] if len(sources) == 1 else out[: limit * 2]
+
+
+def runs_well_hint(found: list[TaskResult], task: str, device: DeviceProfile) -> str | None:
+    """When none of the results runs well on the device, a model that does."""
+    from nanomesh.fit import runs_well
+
+    if any(r.card.fits and r.card.usable for r in found):
+        return None
+    return runs_well(task_name(task), device)
