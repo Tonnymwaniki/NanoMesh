@@ -410,7 +410,11 @@ function resultsTable(rows, { limit, compact } = {}) {
     h("thead", {}, h("tr", {}, ["Model", "Variant", "Size", "Generate", "Peak RAM", "Quality", "Power", "Device", "When"].map(c => h("th", {}, c)))),
     h("tbody", {}, shown.map(r => h("tr", {},
       h("td", {}, `${r.model_name} (${fmt.params(r.model_params)})`), h("td", {}, r.format || "?"),
-      h("td", { class: "num-cell" }, fmt.gb(r.file_size_gb)), h("td", {}, speed(r.gen_tokens_per_s, "measured")),
+      h("td", { class: "num-cell" }, fmt.gb(r.file_size_gb)),
+      h("td", {}, speed(r.gen_tokens_per_s, "measured"), h("span", { class: "src", title: r.steady
+        ? "Measured after warming up until speed settled: what long sessions get"
+        : "Quick benchmark: on laptops it may include the turbo boost of the first minute" }, r.steady ? " · steady" : " · quick"),
+        r.burst_tokens_per_s ? h("div", { class: "src" }, `cold start ${r.burst_tokens_per_s.toFixed(1)} tok/s`) : null),
       h("td", { class: "num-cell" }, fmt.gb(r.peak_rss_gb)),
       h("td", {}, r.quality_pct == null ? "—" : h("span", {}, `${+r.quality_pct.toFixed(2)}% of ${r.reference_format}`)),
       h("td", {}, powerLabel(r.conditions)),

@@ -93,7 +93,7 @@ def test_benchmark_measures_quality_and_feeds_plan(tmp_path, monkeypatch):
     write_gguf(models / "model-F16.gguf", file_type=1)
     write_gguf(models / "model-Q4_K_M.gguf", file_type=15)
 
-    result = runner.invoke(app, ["benchmark", str(models)])
+    result = runner.invoke(app, ["benchmark", str(models), "--quick"])
     assert result.exit_code == 0, result.output
 
     rows = json.loads(runner.invoke(app, ["results", "--json"]).output)
@@ -157,12 +157,64 @@ def test_benchmark_treats_split_gguf_as_one_model(tmp_path, monkeypatch):
     whole = analyze(str(models / "qwen2.5-7b-instruct-q4_k_m-00002-of-00002.gguf"))
     assert whole.params == 64 * 100 + 64 * 64 * 2
 
-    result = runner.invoke(app, ["benchmark", str(models), "--no-quality"])
+    result = runner.invoke(app, ["benchmark", str(models), "--no-quality", "--quick"])
     assert result.exit_code == 0, result.output
     rows = json.loads(runner.invoke(app, ["results", "--json"]).output)
     assert len(rows) == 1
     assert rows[0]["model_params"] == whole.params
 
     (models / "qwen2.5-7b-instruct-q4_k_m-00002-of-00002.gguf").unlink()
-    missing = runner.invoke(app, ["benchmark", str(models), "--no-quality"])
+    missing = runner.invoke(app, ["benchmark", str(models), "--no-quality", "--quick"])
     assert missing.exit_code == 1 and "missing" in missing.output
+
+
+def test_benchmark_is_steady_state_by_default(tmp_path, monkeypatch):
+    import sys
+
+    import pytest
+
+    if sys.platform == "win32":
+        pytest.skip("fake llama.cpp binaries are POSIX scripts")
+    from conftest import write_gguf
+
+    monkeypatch.setenv("NANOMESH_LLAMA_CPP", _fake_llama_cpp(tmp_path))
+    models = tmp_path / "models"
+    models.mkdir()
+    write_gguf(models / "model-Q4_K_M.gguf", file_type=15)
+    write_gguf(models / "model-Q8_0.gguf", file_type=7)
+    result = runner.invoke(app, ["benchmark", str(models), "--no-quality", "--warmup", "0.3"])
+    assert result.exit_code == 0, result.output
+    assert "Steady-state mode" in result.output
+    rows = json.loads(runner.invoke(app, ["results", "--json"]).output)
+    assert all(r["steady"] and r["warmup_s"] >= 0.3 for r in rows)
+    # Only the first file starts cold, so only it shows a cold-start speed.
+    assert rows[0]["burst_tokens_per_s"] and rows[1]["burst_tokens_per_s"] is None
+
+
+def test_steady_benchmark_warms_the_smallest_file_first(tmp_path, monkeypatch):
+    from conftest import write_gguf
+
+    from nanomesh import evaluate as ev_mod
+    from nanomesh.devices import get_device
+    from nanomesh.stress import WarmUp
+    from nanomesh.toolchain import BenchResult
+
+    warmed = []
+
+    def fake_warm_up(tc, f, min_seconds, threads, log):
+        warmed.append((f.name, min_seconds))
+        # The first (hardest-working) file shows turbo ending at 70 s.
+        return WarmUp(seconds=min_seconds, rounds=3, burst_tokens_per_s=22.0, settled_tokens_per_s=15.5,
+                      settled=True, drop_at_s=70 if len(warmed) == 1 else None)
+
+    def fake_bench(tc, f, threads):
+        return BenchResult(model_file=str(f), size_gb=0.01, gen_tokens_per_s=15.5)
+
+    monkeypatch.setattr(ev_mod, "warm_up", fake_warm_up)
+    monkeypatch.setattr(ev_mod, "benchmark_gguf", fake_bench)
+    big = write_gguf(tmp_path / "model-F16.gguf", file_type=1, tensors=tuple((f"t{i}", [64, 64]) for i in range(40)))
+    small = write_gguf(tmp_path / "model-Q4_K_M.gguf", file_type=15)
+
+    ev_mod.evaluate(None, [big, small], get_device("hp-elitebook-840-g6"), quality=False, warmup_s=90)
+    # Q4 warms first; its 70 s turbo window means F16 must warm past it too (70*1.5+10, capped at 90).
+    assert warmed == [("model-Q4_K_M.gguf", 90), ("model-F16.gguf", 90)]

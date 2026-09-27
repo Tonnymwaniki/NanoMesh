@@ -48,6 +48,40 @@ battery draw, energy per token and how many hours of generation a full charge gi
 several thread counts; on CPUs with hyper-threading the default is often not the fastest. Both
 feed `nanomesh plan`'s advice.
 
+### Use NanoMesh from your coding agent (MCP)
+
+NanoMesh runs as a local [MCP](https://modelcontextprotocol.io) server, so Claude Code, Cursor,
+VS Code agents and other MCP clients can ask it about *this* machine before recommending a model,
+quantization or training setup:
+
+```sh
+nanomesh mcp --config     # prints ready-to-paste setup for Claude Code, VS Code and Cursor
+```
+
+| Tool | Answers |
+|---|---|
+| `device_passport` | What can this machine (or a device from the database) run? |
+| `current_conditions` | Battery, power mode, CPU speed, temperature, load: what's slowing things down now |
+| `plan_model` | Which variant of a model to run, with measured speeds where they exist |
+| `list_local_models` | Models already downloaded (Hugging Face, LM Studio, Ollama, folders) and what fits |
+| `benchmark_results` | Everything measured here |
+| `environment_doctor` | Broken or mismatched Python/PyTorch/GPU/llama.cpp setups, with fixes |
+| `training_plan` | Will fine-tuning fit: full, LoRA or QLoRA |
+
+It runs over stdio on your machine and sends nothing anywhere.
+
+### Doctor, local models and training plans
+
+```sh
+nanomesh doctor                        # PyTorch that can't see the GPU, CUDA wheels on CPU laptops, missing llama.cpp…
+nanomesh models C:\models              # models on disk + which fit this machine
+nanomesh train-plan qwen2.5-7b -d rtx-3060-12gb --seq-len 2048
+```
+
+`train-plan` uses standard memory accounting for mixed-precision AdamW (16 bytes per parameter
+for full fine-tuning; a frozen bf16 or 4-bit base plus adapters for LoRA and QLoRA; activations
+with gradient checkpointing; the loss layer). QLoRA is marked unavailable without an NVIDIA GPU.
+
 ### Dashboard
 
 ```sh
@@ -156,6 +190,12 @@ Every benchmark also records the conditions it ran under: plugged in or on batte
 CPU speed and temperature where the system reports them. Calibration prefers plugged-in runs,
 because laptops slow down on battery.
 
+By default `benchmark` measures the **steady state**: before measuring, it generates until the
+speed settles (at least 90 s for the first file, 20 s for the rest). Laptops boost for their first
+minute or so: an HP EliteBook 840 G6 ran Qwen2.5-1.5B at 22 tok/s for about 70 s, then settled at
+15.5. The cold-start speed is recorded too. `--quick` skips the warm-up; calibration prefers
+steady results over quick ones.
+
 For each file, `benchmark` measures prompt/generation speed and peak RAM (`llama-bench`)
 and quality: perplexity relative to the highest-precision variant that fits in memory
 (`llama-perplexity`, on a bundled public-domain text; `--eval-text` to use your own).
@@ -198,6 +238,8 @@ Treat estimates as a way to narrow the search; `benchmark` is the ground truth.
 - [x] First real-hardware validation (HP EliteBook 840 G6): roofline speed model and
       per-model quality calibration came out of it
 - [ ] ONNX / OpenVINO / LiteRT export; AWQ/GPTQ; vision models
+- [x] Agent-ready: `doctor`, `models`, `train-plan` and a local MCP server for coding agents
+- [ ] VS Code extension panel over the same tools
 - [ ] Shared benchmark database: upload `results.jsonl` so every user of a device benefits
 - [ ] Android on-device benchmarking, NPU profiles
 - [ ] NanoMesh Cloud: upload a model, pick a device, download the optimized package

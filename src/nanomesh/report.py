@@ -164,14 +164,29 @@ def plan_view(p: Plan) -> Group:
 
 def bench_table(results: list[Result]) -> Table:
     t = Table(title="Measured on this machine", header_style="bold", title_justify="left")
-    for col in ("Variant", "Size", "Prompt", "Generate", "Peak RAM", "Quality"):
-        t.add_column(col, no_wrap=col != "Variant")
+    steady = any(r.steady for r in results)
+    burst = any(r.burst_tokens_per_s for r in results)
+    t.title = "Measured on this machine · speeds in tok/s" + (" · steady state" if steady else "")
+    warmed = any(r.warmup_settled_tokens_per_s for r in results)
+    cols = ["Variant", "Size", "Prompt", "Generate"] + (["Cold"] if burst else []) + (["Warm-up"] if warmed else []) \
+        + ["Peak RAM", "Quality"]
+    for col in cols:
+        t.add_column(col, no_wrap=True, min_width=6 if col == "Variant" else None)
+
+    def num(v):
+        return f"{v:.1f}" if v is not None and v < 1000 else (f"{v:,.0f}" if v else "—")
+
     for r in results:
         q = f"{r.quality_pct:g}% of {r.reference_format}" if r.quality_pct is not None else "—"
-        t.add_row(r.format or r.model_name, _fmt_gb(r.file_size_gb),
-                  f"{r.prompt_tokens_per_s:g} tok/s" if r.prompt_tokens_per_s else "—",
-                  f"{r.gen_tokens_per_s:g} tok/s" if r.gen_tokens_per_s else "—",
-                  _fmt_gb(r.peak_rss_gb), q)
+        row = [r.format or r.model_name, _fmt_gb(r.file_size_gb), num(r.prompt_tokens_per_s), num(r.gen_tokens_per_s)]
+        if burst:
+            row.append(num(r.burst_tokens_per_s) if r.burst_tokens_per_s else "")
+        if warmed:
+            row.append(num(r.warmup_settled_tokens_per_s) if r.warmup_settled_tokens_per_s else "")
+        t.add_row(*row, _fmt_gb(r.peak_rss_gb), q)
+    if burst or warmed:
+        t.caption = ("Generate: llama-bench after warming up. Cold: the first seconds from idle, when laptops boost. "
+                     "Warm-up: where continuous generation settled before measuring.")
     return t
 
 
@@ -274,3 +289,71 @@ def threads_view(rows: list[Result], default_threads: int | None) -> Table:
         tags = " ".join(x for x in ("🏆 fastest" if r is best else "", "(llama.cpp default)" if r.threads == default_threads else "") if x)
         t.add_row(str(r.threads), f"{r.gen_tokens_per_s:g} tok/s", Text(f"{bar} {tags}", style="green" if r is best else "blue"))
     return t
+
+
+LEVEL_STYLE = {"ok": ("✓", "green"), "warn": ("!", "yellow"), "fail": ("✕", "red")}
+
+
+def doctor_view(env) -> Group:
+    t = Table.grid(padding=(0, 2))
+    t.add_column(style="bold")
+    t.add_column()
+    torch = env.torch or {}
+    rows = [("Python", f"{env.python}{'' if env.in_virtualenv else ' (not in a virtualenv)'}"),
+            ("OS", env.os),
+            ("PyTorch", (f"{torch.get('version')} · " + ("CUDA GPU" if torch.get("cuda") else "Apple GPU" if torch.get("mps")
+                                                        else "CPU only")) if torch and "error" not in torch else
+             (f"broken: {torch.get('error')}" if torch else "not installed")),
+            ("AI packages", ", ".join(f"{k} {v}" for k, v in env.packages.items() if k != "torch") or "none"),
+            ("llama.cpp", "found" if env.llama_cpp.get("llama-bench") else "not found"),
+            ("Tools", ", ".join(sorted(env.tools)) or "none"),
+            ("Disk free", f"{env.disk_free_gb:g} GB" if env.disk_free_gb is not None else None)]
+    for k, v in rows:
+        if v:
+            t.add_row(k, v)
+    out = Text()
+    for f in sorted(env.findings, key=lambda f: ["fail", "warn", "ok"].index(f.level)):
+        mark, style = LEVEL_STYLE[f.level]
+        out.append(f"\n{mark} {f.topic}: {f.message}", style=style)
+        if f.fix:
+            out.append(f"\n    → {f.fix}", style="dim")
+    problems = sum(f.level != "ok" for f in env.findings)
+    out.append(f"\n\n{'No problems found.' if not problems else f'{problems} thing(s) to look at.'}",
+               style="bold green" if not problems else "bold yellow")
+    return Group(Panel(t, title="[bold]ENVIRONMENT", border_style="cyan"), out)
+
+
+def models_view(found, device_name: str) -> Table | Text:
+    if not found:
+        return Text("No models found in the Hugging Face cache, LM Studio, Ollama or ~/models. "
+                    "Point NanoMesh at a folder: nanomesh models C:\\models", style="yellow")
+    t = Table(title=f"Models on this machine · fit for {device_name}", header_style="bold", title_justify="left")
+    for col in ("Model", "Source", "Type", "Size", "Fits", "Best variant here"):
+        t.add_column(col, overflow="fold")
+    for m in found:
+        kind = m.format or m.kind
+        t.add_row(m.name, m.source, kind, f"{m.size_gb:g} GB", Text("yes", style="green") if m.fits else
+                  Text("no", style="red"), m.recommended_note or "—")
+    return t
+
+
+def train_plan_view(tp) -> Group:
+    names = {"full": "Full fine-tuning", "lora": "LoRA", "qlora": "QLoRA"}
+    t = Table(title=f"Fine-tuning {tp.model} ({tp.params / 1e9:.1f}B) on {tp.device}", header_style="bold",
+              title_justify="left")
+    for col in ("", "Method", "Memory", "Trainable", "Fits", "Notes"):
+        t.add_column(col, overflow="fold")
+    for o in tp.options:
+        mark = "🏆" if o.method == tp.recommended else ""
+        fits = Text("yes", style="green") if o.fits else Text("n/a" if not o.available else "no", style="red")
+        trainable = f"{o.trainable_params / 1e6:,.1f}M" if o.trainable_params < 1e9 else f"{o.trainable_params / 1e9:.1f}B"
+        t.add_row(mark, names[o.method], f"{o.total_gb:g} GB", trainable, fits, o.note)
+    info = Text(f"{tp.placement} memory budget ~{tp.memory_gb:g} GB · sequence {tp.seq_len} tokens · batch {tp.batch}"
+                f" · LoRA rank {tp.lora_rank} · gradient checkpointing {'on' if tp.checkpointing else 'off'}",
+                style="dim")
+    if tp.shape_estimated:
+        info.append("\nArchitecture unknown: layer sizes estimated from the parameter count.", style="dim")
+    advice = Text()
+    for a in tp.advice:
+        advice.append(f"\n→ {a}", style="yellow")
+    return Group(t, info, advice)

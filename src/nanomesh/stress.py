@@ -8,6 +8,7 @@ from pathlib import Path
 from statistics import median
 
 import psutil
+from pydantic import BaseModel
 
 from nanomesh.conditions import Sampler, read_conditions, summarize
 from nanomesh.hardware import DeviceProfile
@@ -133,3 +134,62 @@ def tune_threads(tc: Toolchain, f: Path, device: DeviceProfile, counts: list[int
     return [Result(**identity, kind="threads", threads=r.get("n_threads"), gen_tokens_per_s=round(r["avg_ts"], 2),
                    backend=r.get("backends"), conditions=conditions)
             for r in rows if r.get("n_gen")]
+
+
+# Steady-state warm-up. Laptops run a short turbo phase (an HP EliteBook 840 G6
+# held 22 tok/s for ~70 s, then settled at 15.5), so a benchmark taken cold
+# overstates what long sessions get. Generating until speed settles first
+# makes the measurement match sustained use.
+WARMUP_SECONDS = 90.0
+REWARM_SECONDS = 20.0  # later files: the CPU is already in its steady state
+WARMUP_TOKENS = 32
+STABLE_ROUNDS = 3
+STABLE_SPREAD = 0.05
+
+
+class WarmUp(BaseModel):
+    seconds: float
+    rounds: int
+    burst_tokens_per_s: float  # first round: the turbo speed when started cold
+    settled_tokens_per_s: float
+    settled: bool  # False if it hit the time cap while still changing
+    # When speed fell halfway from burst to settled: the turbo window, if any.
+    drop_at_s: float | None = None
+
+
+def warm_up(tc: Toolchain, f: Path, min_seconds: float, threads: int | None = None,
+            max_seconds: float | None = None, log: Callable[[float, float], None] = lambda t, v: None) -> WarmUp:
+    """Generate until at least min_seconds have passed and the last rounds agree."""
+    max_seconds = max_seconds if max_seconds is not None else max(min_seconds * 2.5, min_seconds + 120)
+    args = ["-p", "0", "-n", str(WARMUP_TOKENS), "-r", "1"] + (["-t", str(threads)] if threads else [])
+    speeds, times, t0 = [], [], time.monotonic()
+    while True:
+        rows = bench_rows(tc, f, args)
+        speeds.append(next((r["avg_ts"] for r in rows if r.get("n_gen")), 0.0))
+        elapsed = time.monotonic() - t0
+        times.append(elapsed)
+        log(elapsed, speeds[-1])
+        tail = speeds[-STABLE_ROUNDS:]
+        stable = len(tail) == STABLE_ROUNDS and min(tail) > 0 and max(tail) / min(tail) <= 1 + STABLE_SPREAD
+        if (elapsed >= min_seconds and stable) or elapsed >= max_seconds:
+            burst, settled = speeds[0], median(tail)
+            drop_at = None
+            if settled < burst * 0.9:
+                halfway = burst - 0.5 * (burst - settled)
+                drop_at = next((round(t, 1) for t, v in zip(times, speeds) if v <= halfway), None)
+            return WarmUp(seconds=round(elapsed, 1), rounds=len(speeds), burst_tokens_per_s=round(burst, 2),
+                          settled_tokens_per_s=round(settled, 2), settled=stable, drop_at_s=drop_at)
+
+
+def rewarm_seconds(first: WarmUp, warmup_s: float) -> float:
+    """Minimum warm-up for the files after the first one.
+
+    The first file (the smallest, which works the CPU hardest) reveals the
+    turbo window. A lighter file measured in between (e.g. memory-bound FP16)
+    can let the turbo budget recover, so each later file must warm up past
+    the window again. No drop seen: the device doesn't throttle, so a short
+    re-warm is enough.
+    """
+    if first.drop_at_s is None:
+        return min(warmup_s, REWARM_SECONDS)
+    return min(warmup_s, max(REWARM_SECONDS, first.drop_at_s * 1.5 + 10))
