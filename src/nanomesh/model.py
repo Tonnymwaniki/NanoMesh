@@ -1,0 +1,242 @@
+"""Model analysis: figure out how big a model is without loading its weights."""
+
+from __future__ import annotations
+
+import json
+import re
+import struct
+from math import prod
+from pathlib import Path
+
+from pydantic import BaseModel
+
+DTYPE_BYTES = {
+    "F64": 8, "F32": 4, "F16": 2, "BF16": 2, "F8_E4M3": 1, "F8_E5M2": 1,
+    "I64": 8, "I32": 4, "I16": 2, "I8": 1, "U8": 1, "BOOL": 1,
+}
+
+# Well-known open models, so users can plan before downloading anything.
+# (params in billions, layers, hidden size, attention heads, kv heads, head dim)
+KNOWN_MODELS: dict[str, tuple[float, int, int, int, int, int]] = {
+    "qwen2.5-0.5b": (0.49, 24, 896, 14, 2, 64),
+    "qwen2.5-1.5b": (1.54, 28, 1536, 12, 2, 128),
+    "qwen2.5-3b": (3.09, 36, 2048, 16, 2, 128),
+    "qwen2.5-7b": (7.62, 28, 3584, 28, 4, 128),
+    "llama-3.2-1b": (1.24, 16, 2048, 32, 8, 64),
+    "llama-3.2-3b": (3.21, 28, 3072, 24, 8, 128),
+    "llama-3.1-8b": (8.03, 32, 4096, 32, 8, 128),
+    "llama-3.1-70b": (70.6, 80, 8192, 64, 8, 128),
+    "mistral-7b": (7.25, 32, 4096, 32, 8, 128),
+    "gemma-2-2b": (2.61, 26, 2304, 8, 4, 256),
+    "phi-3-mini": (3.82, 32, 3072, 32, 32, 96),
+}
+
+
+class ModelInfo(BaseModel):
+    name: str
+    source: str  # "safetensors", "gguf", "known", "size"
+    params: int
+    architecture: str | None = None
+    num_layers: int | None = None
+    hidden_size: int | None = None
+    num_attention_heads: int | None = None
+    num_kv_heads: int | None = None
+    head_dim: int | None = None
+    vocab_size: int | None = None
+    max_context: int | None = None
+    source_dtype: str | None = None
+    disk_bytes: int | None = None
+
+    @property
+    def params_b(self) -> float:
+        return self.params / 1e9
+
+    def kv_bytes_per_token(self, bytes_per_elem: int = 2) -> int:
+        """KV-cache bytes needed per token of context (fp16 cache by default)."""
+        if self.num_layers and self.num_kv_heads and self.head_dim:
+            return 2 * self.num_layers * self.num_kv_heads * self.head_dim * bytes_per_elem
+        # Unknown architecture: ~16 KB per billion params per token is typical for
+        # modern grouped-query-attention models (Llama 3 8B is ~128 KB/token).
+        return int(16_384 * max(self.params_b, 0.1))
+
+
+def read_safetensors_header(path: Path) -> dict:
+    with path.open("rb") as f:
+        (length,) = struct.unpack("<Q", f.read(8))
+        if length > 100 * 1024 * 1024:
+            raise ValueError(f"{path.name}: implausible safetensors header size")
+        return json.loads(f.read(length))
+
+
+GGUF_SCALARS = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f", 7: "<?", 10: "<Q", 11: "<q", 12: "<d"}
+
+
+def read_gguf(path: Path) -> tuple[dict, int]:
+    """Return (metadata, total parameter count) from a GGUF file's header."""
+    with path.open("rb") as f:
+        def unpack(fmt):
+            return struct.unpack(fmt, f.read(struct.calcsize(fmt)))[0]
+
+        def string():
+            return f.read(unpack("<Q")).decode("utf-8", errors="replace")
+
+        def value(vtype):
+            if vtype == 8:
+                return string()
+            if vtype == 9:
+                item_type, count = unpack("<I"), unpack("<Q")
+                if item_type in GGUF_SCALARS and item_type != 8:
+                    f.seek(struct.calcsize(GGUF_SCALARS[item_type]) * count, 1)  # skip big arrays
+                    return None
+                return [value(item_type) for _ in range(count)]
+            return unpack(GGUF_SCALARS[vtype])
+
+        if f.read(4) != b"GGUF":
+            raise ValueError(f"{path.name} is not a GGUF file")
+        unpack("<I")  # version
+        n_tensors, n_kv = unpack("<Q"), unpack("<Q")
+        meta = {}
+        for _ in range(n_kv):
+            key = string()
+            v = value(unpack("<I"))
+            if not isinstance(v, list):  # token lists etc. aren't needed
+                meta[key] = v
+        params = 0
+        for _ in range(n_tensors):
+            string()
+            dims = [unpack("<Q") for _ in range(unpack("<I"))]
+            unpack("<I"), unpack("<Q")  # type, offset
+            params += prod(dims)
+    return meta, params
+
+
+SPLIT_RE = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$")
+
+
+def gguf_parts(path: Path) -> list[Path]:
+    """All files of a split GGUF (model-00001-of-00003.gguf, ...), or just [path].
+
+    llama.cpp loads a split model from its first part and finds the rest itself.
+    """
+    m = SPLIT_RE.search(path.name)
+    if not m:
+        return [path]
+    stem = path.name[: m.start()]
+    total = int(m.group(2))
+    return [path.with_name(f"{stem}-{i:05d}-of-{total:05d}.gguf") for i in range(1, total + 1)]
+
+
+def is_later_split_part(path: Path) -> bool:
+    m = SPLIT_RE.search(path.name)
+    return bool(m) and int(m.group(1)) > 1
+
+
+def gguf_size(path: Path) -> int:
+    """Bytes on disk, summed across the parts of a split GGUF."""
+    return sum(p.stat().st_size for p in gguf_parts(path) if p.exists())
+
+
+def _analyze_gguf(path: Path) -> ModelInfo:
+    parts = gguf_parts(path)
+    missing = [p.name for p in parts if not p.exists()]
+    if missing:
+        raise ValueError(f"Split model is missing part(s): {', '.join(missing)}")
+    meta, params = read_gguf(parts[0])
+    params += sum(read_gguf(p)[1] for p in parts[1:])
+    arch = meta.get("general.architecture", "")
+    heads = meta.get(f"{arch}.attention.head_count")
+    hidden = meta.get(f"{arch}.embedding_length")
+    return ModelInfo(
+        name=meta.get("general.name") or path.stem, source="gguf", params=params, architecture=arch or None,
+        num_layers=meta.get(f"{arch}.block_count"), hidden_size=hidden, num_attention_heads=heads,
+        num_kv_heads=meta.get(f"{arch}.attention.head_count_kv", heads),
+        head_dim=meta.get(f"{arch}.attention.key_length") or (hidden // heads if hidden and heads else None),
+        max_context=meta.get(f"{arch}.context_length"), disk_bytes=gguf_size(path),
+    )
+
+
+def _count_safetensors(files: list[Path]) -> tuple[int, str | None]:
+    params = 0
+    dtypes: dict[str, int] = {}
+    for file in files:
+        for name, meta in read_safetensors_header(file).items():
+            if name == "__metadata__":
+                continue
+            n = prod(meta["shape"]) if meta["shape"] else 1
+            params += n
+            dtypes[meta["dtype"]] = dtypes.get(meta["dtype"], 0) + n
+    dominant = max(dtypes, key=dtypes.get) if dtypes else None
+    return params, dominant
+
+
+def _from_config(info: dict, config: dict) -> dict:
+    text = config.get("text_config", config)  # multimodal configs nest the LM config
+    heads = text.get("num_attention_heads")
+    hidden = text.get("hidden_size")
+    head_dim = text.get("head_dim") or (hidden // heads if hidden and heads else None)
+    info.update(
+        architecture=(config.get("architectures") or [config.get("model_type")])[0],
+        num_layers=text.get("num_hidden_layers"),
+        hidden_size=hidden,
+        num_attention_heads=heads,
+        num_kv_heads=text.get("num_key_value_heads", heads),
+        head_dim=head_dim,
+        vocab_size=text.get("vocab_size"),
+        max_context=text.get("max_position_embeddings"),
+    )
+    return info
+
+
+def parse_size(spec: str) -> float | None:
+    m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([bm])\s*", spec.lower())
+    if not m:
+        return None
+    value = float(m.group(1))
+    return value if m.group(2) == "b" else value / 1000
+
+
+def analyze(spec: str) -> ModelInfo:
+    """Analyze a local model directory/file, a known model name, or a size like '7b'."""
+    path = Path(spec).expanduser()
+    if path.is_dir():
+        return _analyze_dir(path)
+    if path.is_file() and path.suffix == ".gguf":
+        first = gguf_parts(path)[0]  # any part of a split model means the whole model
+        return _analyze_gguf(first)
+    if path.is_file() and path.suffix == ".safetensors":
+        params, dtype = _count_safetensors([path])
+        return ModelInfo(name=path.stem, source="safetensors", params=params,
+                         source_dtype=dtype, disk_bytes=path.stat().st_size)
+
+    key = spec.lower().strip()
+    if key in KNOWN_MODELS:
+        p, layers, hidden, heads, kv, hd = KNOWN_MODELS[key]
+        return ModelInfo(name=key, source="known", params=int(p * 1e9), num_layers=layers,
+                         hidden_size=hidden, num_attention_heads=heads, num_kv_heads=kv,
+                         head_dim=hd, source_dtype="BF16")
+    size_b = parse_size(spec)
+    if size_b:
+        return ModelInfo(name=f"{spec.upper()} model", source="size", params=int(size_b * 1e9),
+                         source_dtype="BF16")
+    known = ", ".join(KNOWN_MODELS)
+    raise ValueError(
+        f"Can't interpret '{spec}'. Pass a model directory, a .safetensors/.gguf file, "
+        f"a size like '7b', or one of: {known}"
+    )
+
+
+def _analyze_dir(path: Path) -> ModelInfo:
+    info: dict = {"name": path.name, "source": "safetensors"}
+    config_path = path / "config.json"
+    if config_path.exists():
+        _from_config(info, json.loads(config_path.read_text(encoding="utf-8")))
+    files = sorted(path.glob("*.safetensors"))
+    ggufs = sorted(path.glob("*.gguf"))
+    if files:
+        info["params"], info["source_dtype"] = _count_safetensors(files)
+        info["disk_bytes"] = sum(f.stat().st_size for f in files)
+    elif ggufs:
+        return analyze(str(ggufs[0]))
+    else:
+        raise ValueError(f"No .safetensors or .gguf weights found in {path}")
+    return ModelInfo(**info)

@@ -1,0 +1,439 @@
+[
+  {
+    "id": "hp-elitebook-840-g3",
+    "name": "HP EliteBook 840 G3",
+    "kind": "laptop",
+    "arch": "x86_64",
+    "cpu": "Intel Core i5-6300U",
+    "physical_cores": 2,
+    "logical_cores": 4,
+    "cpu_flags": [
+      "sse4_2",
+      "avx",
+      "avx2",
+      "fma",
+      "f16c"
+    ],
+    "ram_gb": 8,
+    "memory_bandwidth_gbps": 34.1,
+    "gpus": [
+      {
+        "name": "Intel HD Graphics 520",
+        "vendor": "Intel",
+        "unified_memory": true
+      }
+    ],
+    "match": [
+      "hp elitebook 840 g3"
+    ],
+    "runtimes": [
+      "llama.cpp (CPU)",
+      "onnxruntime (CPU)",
+      "OpenVINO"
+    ],
+    "notes": "Common configuration: 8 GB DDR4-2133 dual-channel."
+  },
+  {
+    "id": "hp-elitebook-840-g6",
+    "name": "HP EliteBook 840 G6",
+    "kind": "laptop",
+    "arch": "x86_64",
+    "cpu": "Intel Core i5-8365U",
+    "physical_cores": 4,
+    "logical_cores": 8,
+    "cpu_flags": [
+      "sse4_2",
+      "avx",
+      "avx2",
+      "fma",
+      "f16c"
+    ],
+    "ram_gb": 8,
+    "memory_bandwidth_gbps": 38.4,
+    "gpus": [
+      {
+        "name": "Intel UHD Graphics 620",
+        "vendor": "Intel",
+        "unified_memory": true
+      }
+    ],
+    "match": [
+      "hp elitebook 840 g6"
+    ],
+    "runtimes": [
+      "llama.cpp (CPU)",
+      "onnxruntime (CPU)",
+      "OpenVINO"
+    ],
+    "notes": "DDR4-2400 dual-channel; shipped with 8, 16 or 32 GB."
+  },
+  {
+    "id": "lenovo-thinkpad-t480",
+    "name": "Lenovo ThinkPad T480",
+    "kind": "laptop",
+    "arch": "x86_64",
+    "cpu": "Intel Core i5-8250U",
+    "physical_cores": 4,
+    "logical_cores": 8,
+    "cpu_flags": [
+      "sse4_2",
+      "avx",
+      "avx2",
+      "fma",
+      "f16c"
+    ],
+    "ram_gb": 8,
+    "memory_bandwidth_gbps": 38.4,
+    "gpus": [
+      {
+        "name": "Intel UHD Graphics 620",
+        "vendor": "Intel",
+        "unified_memory": true
+      }
+    ],
+    "match": [
+      "thinkpad t480"
+    ],
+    "runtimes": [
+      "llama.cpp (CPU)",
+      "onnxruntime (CPU)",
+      "OpenVINO"
+    ],
+    "notes": "Common configuration: 8 GB DDR4-2400 dual-channel."
+  },
+  {
+    "id": "dell-latitude-7490",
+    "name": "Dell Latitude 7490",
+    "kind": "laptop",
+    "arch": "x86_64",
+    "cpu": "Intel Core i5-8350U",
+    "physical_cores": 4,
+    "logical_cores": 8,
+    "cpu_flags": [
+      "sse4_2",
+      "avx",
+      "avx2",
+      "fma",
+      "f16c"
+    ],
+    "ram_gb": 8,
+    "memory_bandwidth_gbps": 38.4,
+    "gpus": [
+      {
+        "name": "Intel UHD Graphics 620",
+        "vendor": "Intel",
+        "unified_memory": true
+      }
+    ],
+    "match": [
+      "latitude 7490"
+    ],
+    "runtimes": [
+      "llama.cpp (CPU)",
+      "onnxruntime (CPU)",
+      "OpenVINO"
+    ],
+    "notes": "Common configuration: 8 GB DDR4-2400 dual-channel."
+  },
+  {
+    "id": "macbook-air-m1-8gb",
+    "name": "MacBook Air M1 (8 GB)",
+    "kind": "laptop",
+    "os": "macOS",
+    "arch": "arm64",
+    "cpu": "Apple M1 (4P + 4E)",
+    "physical_cores": 8,
+    "logical_cores": 8,
+    "cpu_flags": [
+      "neon",
+      "asimd",
+      "asimddp"
+    ],
+    "ram_gb": 8,
+    "memory_bandwidth_gbps": 68.25,
+    "gpus": [
+      {
+        "name": "Apple M1 GPU",
+        "vendor": "Apple",
+        "vram_gb": 8,
+        "unified_memory": true,
+        "bandwidth_gbps": 68.25
+      }
+    ],
+    "npu": "Apple Neural Engine (16-core)",
+    "match": [
+      "macbookair10,1"
+    ],
+    "runtimes": [
+      "llama.cpp (Metal)",
+      "MLX",
+      "Core ML"
+    ]
+  },
+  {
+    "id": "raspberry-pi-5-8gb",
+    "name": "Raspberry Pi 5 (8 GB)",
+    "kind": "sbc",
+    "os": "Linux",
+    "arch": "aarch64",
+    "cpu": "Broadcom BCM2712 (4x Cortex-A76)",
+    "physical_cores": 4,
+    "logical_cores": 4,
+    "cpu_flags": [
+      "neon",
+      "asimd",
+      "asimddp"
+    ],
+    "ram_gb": 8,
+    "memory_bandwidth_gbps": 17.1,
+    "gpus": [
+      {
+        "name": "VideoCore VII",
+        "vendor": "Broadcom",
+        "unified_memory": true
+      }
+    ],
+    "match": [
+      "raspberry pi 5"
+    ],
+    "runtimes": [
+      "llama.cpp (CPU)",
+      "onnxruntime (CPU)"
+    ],
+    "notes": "LPDDR4X-4267, 32-bit bus."
+  },
+  {
+    "id": "jetson-orin-nano-8gb",
+    "name": "NVIDIA Jetson Orin Nano (8 GB)",
+    "kind": "sbc",
+    "os": "Linux",
+    "arch": "aarch64",
+    "cpu": "6x Cortex-A78AE",
+    "physical_cores": 6,
+    "logical_cores": 6,
+    "cpu_flags": [
+      "neon",
+      "asimd",
+      "asimddp"
+    ],
+    "ram_gb": 8,
+    "memory_bandwidth_gbps": 68,
+    "gpus": [
+      {
+        "name": "Ampere GPU (1024 CUDA cores)",
+        "vendor": "NVIDIA",
+        "vram_gb": 8,
+        "unified_memory": true,
+        "bandwidth_gbps": 68,
+        "compute_capability": "8.7"
+      }
+    ],
+    "match": [
+      "jetson orin nano"
+    ],
+    "runtimes": [
+      "llama.cpp (CUDA)",
+      "TensorRT",
+      "onnxruntime (CUDA)"
+    ],
+    "notes": "Memory is shared between CPU and GPU."
+  },
+  {
+    "id": "redmi-14c-4gb",
+    "name": "Xiaomi Redmi 14C (4 GB)",
+    "kind": "phone",
+    "os": "Android",
+    "arch": "aarch64",
+    "cpu": "MediaTek Helio G81-Ultra (2x A75 + 6x A55)",
+    "physical_cores": 8,
+    "logical_cores": 8,
+    "cpu_flags": [
+      "neon",
+      "asimd"
+    ],
+    "ram_gb": 4,
+    "gpus": [
+      {
+        "name": "Mali-G52 MC2",
+        "vendor": "ARM",
+        "unified_memory": true
+      }
+    ],
+    "match": [
+      "redmi 14c"
+    ],
+    "runtimes": [
+      "llama.cpp (CPU)",
+      "onnxruntime (CPU)",
+      "LiteRT"
+    ]
+  },
+  {
+    "id": "samsung-galaxy-a25-6gb",
+    "name": "Samsung Galaxy A25 5G (6 GB)",
+    "kind": "phone",
+    "os": "Android",
+    "arch": "aarch64",
+    "cpu": "Samsung Exynos 1280 (2x A78 + 6x A55)",
+    "physical_cores": 8,
+    "logical_cores": 8,
+    "cpu_flags": [
+      "neon",
+      "asimd",
+      "asimddp"
+    ],
+    "ram_gb": 6,
+    "gpus": [
+      {
+        "name": "Mali-G68 MP4",
+        "vendor": "ARM",
+        "unified_memory": true
+      }
+    ],
+    "match": [
+      "galaxy a25",
+      "sm-a256\\w*"
+    ],
+    "runtimes": [
+      "llama.cpp (CPU)",
+      "onnxruntime (CPU)",
+      "LiteRT"
+    ]
+  },
+  {
+    "id": "rtx-3060-12gb",
+    "name": "Desktop with NVIDIA RTX 3060 (12 GB)",
+    "kind": "gpu",
+    "arch": "x86_64",
+    "ram_gb": 16,
+    "gpus": [
+      {
+        "name": "NVIDIA GeForce RTX 3060",
+        "vendor": "NVIDIA",
+        "vram_gb": 12,
+        "bandwidth_gbps": 360,
+        "compute_capability": "8.6"
+      }
+    ],
+    "runtimes": [
+      "llama.cpp (CUDA)",
+      "TensorRT",
+      "onnxruntime (CUDA)",
+      "vLLM"
+    ]
+  },
+  {
+    "id": "rtx-4090-24gb",
+    "name": "Desktop with NVIDIA RTX 4090 (24 GB)",
+    "kind": "gpu",
+    "arch": "x86_64",
+    "ram_gb": 64,
+    "gpus": [
+      {
+        "name": "NVIDIA GeForce RTX 4090",
+        "vendor": "NVIDIA",
+        "vram_gb": 24,
+        "bandwidth_gbps": 1008,
+        "compute_capability": "8.9"
+      }
+    ],
+    "runtimes": [
+      "llama.cpp (CUDA)",
+      "TensorRT-LLM",
+      "onnxruntime (CUDA)",
+      "vLLM"
+    ]
+  },
+  {
+    "id": "h100-sxm-80gb",
+    "name": "NVIDIA H100 SXM (80 GB)",
+    "kind": "server",
+    "arch": "x86_64",
+    "ram_gb": 512,
+    "gpus": [
+      {
+        "name": "NVIDIA H100 SXM",
+        "vendor": "NVIDIA",
+        "vram_gb": 80,
+        "bandwidth_gbps": 3350,
+        "compute_capability": "9.0"
+      }
+    ],
+    "runtimes": [
+      "TensorRT-LLM",
+      "vLLM",
+      "SGLang",
+      "llama.cpp (CUDA)"
+    ],
+    "notes": "Native FP8 support."
+  },
+  {
+    "id": "low-end-android-4gb",
+    "name": "Generic low-end Android (4 GB)",
+    "kind": "phone",
+    "os": "Android",
+    "arch": "aarch64",
+    "cpu_flags": [
+      "neon",
+      "asimd"
+    ],
+    "ram_gb": 4,
+    "runtimes": [
+      "llama.cpp (CPU)",
+      "onnxruntime (CPU)",
+      "LiteRT"
+    ],
+    "notes": "Class target for entry-level Android phones common in emerging markets."
+  },
+  {
+    "id": "mid-android-8gb",
+    "name": "Generic mid-range Android (8 GB)",
+    "kind": "phone",
+    "os": "Android",
+    "arch": "aarch64",
+    "cpu_flags": [
+      "neon",
+      "asimd",
+      "asimddp"
+    ],
+    "ram_gb": 8,
+    "runtimes": [
+      "llama.cpp (CPU)",
+      "onnxruntime (CPU)",
+      "LiteRT"
+    ]
+  },
+  {
+    "id": "budget-laptop-8gb",
+    "name": "Generic budget laptop (8 GB, CPU only)",
+    "kind": "laptop",
+    "arch": "x86_64",
+    "cpu_flags": [
+      "avx",
+      "avx2"
+    ],
+    "ram_gb": 8,
+    "memory_bandwidth_gbps": 34,
+    "runtimes": [
+      "llama.cpp (CPU)",
+      "onnxruntime (CPU)"
+    ]
+  },
+  {
+    "id": "cheap-vps-4gb",
+    "name": "Generic cheap VPS (2 vCPU, 4 GB)",
+    "kind": "server",
+    "os": "Linux",
+    "arch": "x86_64",
+    "logical_cores": 2,
+    "cpu_flags": [
+      "avx",
+      "avx2"
+    ],
+    "ram_gb": 4,
+    "runtimes": [
+      "llama.cpp (CPU)",
+      "onnxruntime (CPU)"
+    ]
+  }
+]

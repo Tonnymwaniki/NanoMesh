@@ -1,0 +1,1 @@
+{"timestamp":"2026-09-27T00:30:00+00:00","device_key":"hp-elitebook-840-g6","device_name":"HP EliteBook 840 G6","model_name":"qwen2.5-7b-instruct","model_params":7615616512,"model_architecture":"qwen2","format":"Q4_K_M","file_size_gb":4.36,"prompt_tokens_per_s":14.28,"gen_tokens_per_s":3.96,"peak_rss_gb":7.22,"backend":"CPU","threads":4}
