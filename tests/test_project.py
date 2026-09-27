@@ -211,7 +211,7 @@ const GEMINI_MEME_MODEL = process.env.MEME_MODEL || "gemini-3-flash-preview";
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 async function callGemini(prompt, modelName) {
-  const model = genAI.getGenerativeModel({ model: modelName });
+  const model = genAI.getGenerativeModel({ model: modelName || "gemini-2.0-flash" });
   const result = await model.generateContent(prompt);
   return result.response.text();
 }
@@ -249,7 +249,8 @@ def test_firebase_backend_and_android_app(tmp_path):
     # The backend's one SDK call, with both models it's given through the helper.
     assert (server.provider, server.task, server.calls) == ("Google Gemini", "chat", 1)
     assert server.locations[0].file == "functions/index.js" and server.locations[0].line == 8
-    assert server.models == ["gemini-2.5-flash", "gemini-3-flash-preview"]
+    # The helper's default is on the line above the call; the models callers pass are further away.
+    assert server.models == ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-3-flash-preview"]
     # A laptop can't serve the app's users: the option is a server, sized for a cheap VPS.
     assert server.alternative.target == "Generic cheap VPS (2 vCPU, 4 GB)"
     assert "can't serve its users" in server.alternative.how

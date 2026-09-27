@@ -330,6 +330,17 @@ def _model_near(lines: list[str], idx: int, constants: dict[str, str]) -> str | 
     return None
 
 
+def _task_for_model(name: str) -> str:
+    n = name.lower()
+    if "embed" in n:
+        return "embeddings"
+    if n.startswith("whisper"):
+        return "speech-to-text"
+    if n.startswith(("dall-e", "gpt-image", "imagen")):
+        return "image generation"
+    return "chat"
+
+
 def _provider_for_model(name: str) -> str | None:
     n = name.lower()
     for prefix, provider in (("gpt", "OpenAI"), ("o1", "OpenAI"), ("o3", "OpenAI"), ("o4", "OpenAI"),
@@ -520,12 +531,11 @@ def analyze_project(root: Path, device: DeviceProfile, include_tests: bool = Fal
         groups.setdefault((u.provider, u.task, u.where), []).append(u)
     findings = []
     for (provider, task, where), us in sorted(groups.items(), key=lambda kv: (kv[1][0].local, -len(kv[1]))):
-        models = {u.model for u in us if u.model}
-        if not models:
-            # The model came through a variable (callGemini(prompt, MEME_MODEL)): use the ones the files name.
-            models = {m for u in us for m in mentioned.get(u.location.file, ())
-                      if _provider_for_model(m) in (provider, None) or provider.startswith("LangChain")}
-        models = sorted(models)
+        # Calls often get their model through a helper or a default (callGemini(prompt, MEME_MODEL) with
+        # model || "gemini-2.0-flash"), so list every model these files name for this provider and task.
+        models = sorted({u.model for u in us if u.model} | {
+            m for u in us for m in mentioned.get(u.location.file, ())
+            if _task_for_model(m) == task and (_provider_for_model(m) == provider or provider.startswith("LangChain"))})
         f = Finding(provider=provider, task=task, where=where, models=models, calls=len(us), local=us[0].local,
                     locations=[u.location for u in us[:MAX_LOCATIONS]])
         if not f.local:
