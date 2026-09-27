@@ -14,7 +14,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from nanomesh.hardware import GB, DeviceProfile
-from nanomesh.model import _analyze_gguf, analyze, gguf_parts, gguf_size, is_later_split_part, read_gguf
+from nanomesh.model import SPLIT_RE, _analyze_gguf, analyze, gguf_parts, gguf_size, is_later_split_part, read_gguf
 from nanomesh.planner import Requirements, memory_budgets, plan
 from nanomesh.results import evidence, gguf_format
 
@@ -141,7 +141,9 @@ def find_models(device: DeviceProfile, extra: list[Path] | None = None, context:
             add(root.stem, root, source)
             continue
         for cand in _walk(root):
-            name = cand.stem if cand.is_file() else cand.name
+            # qwen2.5-7b-q4_k_m-00001-of-00002.gguf -> qwen2.5-7b-q4_k_m
+            name = SPLIT_RE.sub("", cand.name) if cand.is_file() else cand.name
+            name = name.removesuffix(".gguf")
             if source == "huggingface" and "snapshots" in cand.parts:
                 # models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/<hash> -> Qwen/Qwen2.5-1.5B-Instruct
                 repo = next((p for p in cand.parts if p.startswith("models--")), cand.name)

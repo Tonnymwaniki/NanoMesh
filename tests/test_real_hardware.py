@@ -111,3 +111,9 @@ def test_split_7b_measurement_is_used_by_plan(elitebook_results):
     assert ev.compute_gparams_per_s == pytest.approx(3.96 * 7.6156, abs=0.1)
     q3 = _v(plan(model, device, evidence=ev), "Q3_K_M")
     assert q3.speed_source == "calibrated" and q3.tokens_per_s >= 3.96
+    # The 7B streamed weights slower than the 1.5B did, so its bigger formats
+    # can't be predicted faster than the Q4_K_M it measured (was 4.2 for Q5_K_M).
+    p = plan(model, device, evidence=ev)
+    q5 = _v(p, "Q5_K_M")
+    assert q5.speed_source == "calibrated" and q5.tokens_per_s == pytest.approx(3.4, abs=0.1)
+    assert p.recommended == "Q4_K_M"

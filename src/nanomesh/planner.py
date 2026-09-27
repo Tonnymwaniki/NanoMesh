@@ -193,13 +193,16 @@ def _decode_speed(weights_gb: float, kv_gb: float, effective_gbps: float) -> flo
 
 
 def _speed(fmt: QuantFormat, weights: float, kv: float, budget: Budget, primary: bool,
-           ev: Evidence, params: int) -> tuple[float | None, str | None]:
+           ev: Evidence, params: int, model_bandwidth: float | None = None) -> tuple[float | None, str | None]:
     # Benchmarks run on the device's preferred placement, so measurements and
     # calibration only apply to variants that land there too.
     if primary and fmt.name in ev.speeds:
         return ev.speeds[fmt.name], "measured"
     if primary and ev.effective_bandwidth_gbps:
-        speed = _decode_speed(weights, kv, ev.effective_bandwidth_gbps)
+        # A model's own runs are the better guide: a 7B model doesn't reach the
+        # bandwidth a small one did, so its other formats can't either.
+        bandwidth = min(ev.effective_bandwidth_gbps, model_bandwidth or ev.effective_bandwidth_gbps)
+        speed = _decode_speed(weights, kv, bandwidth)
         if ev.compute_gparams_per_s:
             # Low-bit formats can outrun the CPU's ability to unpack them.
             speed = min(speed, round(ev.compute_gparams_per_s / (params / 1e9), 1))
@@ -226,11 +229,17 @@ def plan(model: ModelInfo, device: DeviceProfile, req: Requirements | None = Non
     min_pct = req.min_quality_pct if req.min_quality_pct is not None else TIER_FLOORS[req.min_quality]
     fp16_gb = model.params * 2 / GB
 
+    # Bandwidth this model's measured formats achieved (tok/s x bytes per token).
+    model_bw = max((ev.speeds[f.name] * (w + kv * 0.5) * GB / 1e9
+                    for f in FORMATS if f.name in ev.speeds
+                    for w, kv, _ in [estimate(model, f, req.context)]), default=None)
+
     variants = []
     for fmt in FORMATS:
         weights, kv, total = estimate(model, fmt, req.context)
         budget = next((b for b in budgets if total <= b.memory_gb), None)
-        speed, source = _speed(fmt, weights, kv, budget, budget is budgets[0], ev, model.params) if budget else (None, None)
+        speed, source = (_speed(fmt, weights, kv, budget, budget is budgets[0], ev, model.params, model_bw)
+                         if budget else (None, None))
         measured_q = fmt.name in ev.quality
         if measured_q:
             quality_pct, q_source = min(ev.quality[fmt.name], 100.0), "measured"
