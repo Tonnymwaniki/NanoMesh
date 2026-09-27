@@ -99,7 +99,9 @@ def test_models_found_in_hf_cache_lm_studio_and_ollama(tmp_path, monkeypatch):
     found = {m.name: m for m in find_models(get_device("hp-elitebook-840-g6"), [])}
     assert set(found) == {"Qwen/Qwen2.5-0.5B", "tiny-Q4_K_M", "big-Q8_0", "half-Q4_K_M", "llama3.2:1b"}
     assert (found["big-Q8_0"].parts, found["big-Q8_0"].missing_parts) == (2, 0)
-    assert (found["half-Q4_K_M"].parts, found["half-Q4_K_M"].missing_parts) == (3, 2)
+    half = found["half-Q4_K_M"]
+    assert (half.parts, half.missing_parts, half.fits) == (3, 2, False)
+    assert "half-Q4_K_M-00002-of-00003.gguf" in half.recommended_note
     assert found["tiny-Q4_K_M"].parts == 1
     assert found["Qwen/Qwen2.5-0.5B"].source == "huggingface" and found["Qwen/Qwen2.5-0.5B"].kind == "safetensors"
     assert found["tiny-Q4_K_M"].format == "Q4_K_M" and found["tiny-Q4_K_M"].fits

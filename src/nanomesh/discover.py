@@ -96,15 +96,24 @@ def _is_gguf(path: Path) -> bool:
 
 def _describe(name: str, path: Path, source: str, device: DeviceProfile, context: int) -> FoundModel | None:
     is_gguf = path.is_file() and _is_gguf(path)
+    if is_gguf and (missing := [p for p in gguf_parts(path) if not p.is_file()]):
+        # An interrupted download: list it so the user knows what to fetch.
+        try:
+            meta, first_params = read_gguf(path)
+        except (ValueError, OSError, KeyError, struct.error, UnicodeDecodeError):
+            return None
+        return FoundModel(name=name, path=str(path), source=source, kind="gguf", format=gguf_format(meta, path),
+                          params=first_params, size_gb=round(gguf_size(path) / GB, 2),
+                          parts=len(gguf_parts(path)), missing_parts=len(missing), fits=False,
+                          recommended_note="Incomplete: download " + ", ".join(p.name for p in missing))
     try:
         # Ollama blobs are GGUF files without the extension.
         info = _analyze_gguf(gguf_parts(path)[0]) if is_gguf else analyze(str(path))
     except (ValueError, OSError, KeyError, struct.error, UnicodeDecodeError):
         return None
-    fmt, size, parts, missing = None, (info.disk_bytes or 0), 1, 0
+    fmt, size, parts = None, (info.disk_bytes or 0), 1
     if is_gguf:
         parts = len(gguf_parts(path))
-        missing = sum(not p.is_file() for p in gguf_parts(path))
         meta, _ = read_gguf(gguf_parts(path)[0])
         fmt, size = gguf_format(meta, path), gguf_size(path)
     budget = max(b.memory_gb for b in memory_budgets(device))
@@ -113,7 +122,7 @@ def _describe(name: str, path: Path, source: str, device: DeviceProfile, context
     rec = next((v for v in p.variants if v.format.name == p.recommended), None)
     return FoundModel(
         name=name, path=str(path), source=source, kind="gguf" if is_gguf else "safetensors", format=fmt,
-        params=info.params, size_gb=round(size / GB, 2), parts=parts, missing_parts=missing, fits=size / GB + kv + 0.3 <= budget,
+        params=info.params, size_gb=round(size / GB, 2), parts=parts, fits=size / GB + kv + 0.3 <= budget,
         recommended=p.recommended,
         recommended_note=(f"{rec.format.label} · {rec.total_memory_gb:.1f} GB"
                           + (f" · {rec.tokens_per_s:g} tok/s" if rec and rec.tokens_per_s else "")) if rec else
