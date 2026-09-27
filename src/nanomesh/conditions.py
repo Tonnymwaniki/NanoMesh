@@ -324,6 +324,7 @@ def summarize(start: Conditions, readings: list[Conditions], duration_s: float) 
 # ---- advice ----
 
 HOT_C = 90.0
+BUSY_CPU_PCT = 40.0  # other programs' CPU use at which measurements stop being representative
 
 
 def advice(c: Conditions, *, busy: bool = False, battery_note: str | None = None) -> list[str]:
@@ -346,7 +347,7 @@ def advice(c: Conditions, *, busy: bool = False, battery_note: str | None = None
     if busy and c.clock_pct is not None and c.clock_pct < 80:
         out.append(f"Under load the CPU ran at only {c.clock_pct:g}% of its rated speed: it is being held back "
                    "by power or heat limits.")
-    if not busy and c.cpu_load_pct is not None and c.cpu_load_pct >= 40:
+    if not busy and c.cpu_load_pct is not None and c.cpu_load_pct >= BUSY_CPU_PCT:
         out.append(f"Other programs are using {c.cpu_load_pct:g}% of the CPU right now, which slows models down.")
     if c.battery_full_wh and c.battery_design_wh and c.battery_full_wh < 0.7 * c.battery_design_wh:
         pct = round(100 * c.battery_full_wh / c.battery_design_wh)

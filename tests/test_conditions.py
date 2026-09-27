@@ -316,3 +316,33 @@ def test_results_table_labels_each_kind_of_run():
     assert "→ 15.57 tok/s" in text  # plugged in: settled at 15.57 after the turbo burst
     assert "sustained · battery" in text and "→ 14.77 tok/s" in text
     assert "steady" in text
+
+
+# The EliteBook, on battery, with other programs using 57.6% of the CPU at the start.
+ELITEBOOK_BUSY_BATTERY = [(18, 14.22), (32, 14.60), (47, 13.87), (60, 14.97), (75, 15.14), (88, 14.37), (103, 14.02),
+                          (116, 13.96), (129, 13.83), (144, 13.40), (158, 12.68), (172, 13.58), (186, 13.56),
+                          (200, 13.51), (214, 13.57), (228, 12.58), (242, 15.03), (256, 14.37), (274, 11.26),
+                          (290, 13.29), (305, 14.61)]
+
+
+def test_busy_run_does_not_replace_a_quiet_one():
+    from rich.console import Console
+
+    from nanomesh.report import sustained_view
+
+    plugged = summarize_sustained([SustainedPoint(t_s=t, tokens_per_s=v) for t, v in ELITEBOOK_SUSTAINED], None)
+    quiet = summarize_sustained([SustainedPoint(t_s=t, tokens_per_s=v) for t, v, _ in ELITEBOOK_BATTERY], None)
+    busy = summarize_sustained([SustainedPoint(t_s=t, tokens_per_s=v) for t, v in ELITEBOOK_BUSY_BATTERY], None)
+    busy_row = _row(kind="sustained", sustained=busy, timestamp="2026-09-27T13:00:00+00:00",
+                    conditions=summarize(Conditions(on_battery=True, cpu_load_pct=57.6), [], 10))
+    rows = [_row(kind="sustained", sustained=plugged, conditions=_run_cond(False)),
+            _row(kind="sustained", sustained=quiet, conditions=_run_cond(True), timestamp="2026-09-27T12:00:00+00:00"),
+            busy_row]
+    assert busy_row.busy and not rows[1].busy
+    bc = store.evidence(get_device("hp-elitebook-840-g6"), analyze("qwen2.5-1.5b"), rows).battery_cost
+    # Still the quiet battery run (5% cost), not the busy one (13.57 tok/s, which read as 13%).
+    assert (bc.battery_sustained, bc.sustained_loss_pct) == (14.77, 5.1)
+
+    console = Console(width=200, record=True)
+    console.print(sustained_view(busy_row))
+    assert "57.6% of the CPU" in console.export_text()

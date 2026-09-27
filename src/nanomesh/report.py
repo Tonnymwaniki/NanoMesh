@@ -191,7 +191,7 @@ def bench_table(results: list[Result]) -> Table:
 
 
 def _run_label(r: Result) -> str:
-    power = " · battery" if r.on_battery else ""
+    power = (" · battery" if r.on_battery else "") + (" · busy" if r.busy else "")
     if r.kind == "sustained":
         return "sustained" + power
     if r.kind == "threads":
@@ -274,6 +274,10 @@ def sustained_view(r: Result) -> Panel:
                  "A 15-minute run narrows it.", style="dim")
     elif s.energy_source:
         t.append(f"\nMeasured with the battery's {s.energy_source}.", style="dim")
+    if r.busy:
+        t.append(f"\nOther programs were using {rc.start.cpu_load_pct:g}% of the CPU when this started, so these "
+                 "figures include their load. NanoMesh prefers quiet runs; close them and run again for a clean "
+                 "measurement.", style="yellow")
     if rc and rc.start.on_battery is False:
         t.append("\nPlugged in: unplug and run again to measure battery life and energy per token.", style="dim")
     if s.drop_pattern == "step":
