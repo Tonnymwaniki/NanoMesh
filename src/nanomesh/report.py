@@ -493,7 +493,8 @@ def fit_card_view(c) -> Panel:
             rows.append((label, Text(value)))
     for k, v in rows:
         grid.add_row(k, v)
-    body = Group(grid, *[Text(f"· {n}", style="dim") for n in c.notes])
+    shown = c.notes[1:] if not c.fits and c.notes and c.notes[0].startswith("Can't run on") else c.notes
+    body = Group(grid, *[Text(f"· {n}", style="dim") for n in shown])
     return Panel(body, title=f"[bold]{c.model}[/] · {c.task} · on {c.device}", title_align="left",
                  border_style="green" if c.fits and c.usable else "yellow")
 

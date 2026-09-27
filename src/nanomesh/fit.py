@@ -94,6 +94,20 @@ FAMILIES = [
                     Member(id="m", params_m=25.9, gflops=78.9, rank=3, quality="COCO mAP 50.2 (published)"),
                     Member(id="l", params_m=43.7, gflops=165.2, rank=4, quality="COCO mAP 52.9 (published)"),
                     Member(id="x", params_m=68.2, gflops=257.8, rank=5, quality="COCO mAP 53.9 (published)")]),
+    Family(series="rt-detr", prefix="rtdetr-r", task="object detection", unit="images/s", runtime="onnx",
+           bytes_per_param=4.0, usable=2.0, pattern=r"rt-?detr(?:-?v2)?[-_]?r(?P<m>18|34|50|101)",
+           how="transformers (RTDetrForObjectDetection, 'PekingU/rtdetr_r{m}vd'), or export it to ONNX with "
+               "optimum-cli export onnx for ONNX Runtime.",
+           members=[Member(id="18", params_m=20, gflops=60, rank=1, quality="COCO AP 46.5, v2 47.9 (published)"),
+                    Member(id="34", params_m=31, gflops=92, rank=2, quality="COCO AP 48.9, v2 49.9 (published)"),
+                    Member(id="50", params_m=42, gflops=136, rank=3, quality="COCO AP 53.1, v2 53.4 (published)"),
+                    Member(id="101", params_m=76, gflops=259, rank=4, quality="COCO AP 54.3, v2 54.3 (published)")]),
+    Family(series="detr", prefix="detr-resnet-", task="object detection", unit="images/s", runtime="onnx",
+           bytes_per_param=4.0, usable=2.0, pattern=r"(^|/)detr-resnet-(?P<m>50|101)",
+           how="transformers (DetrForObjectDetection, 'facebook/detr-resnet-{m}'); RT-DETR is faster and more "
+               "accurate at the same size.",
+           members=[Member(id="50", params_m=41, gflops=86, rank=1, quality="COCO AP 42.0 (published)"),
+                    Member(id="101", params_m=60, gflops=152, rank=2, quality="COCO AP 43.5 (published)")]),
     Family(series="image classifiers", task="image classification", unit="images/s", runtime="onnx",
            bytes_per_param=4.0, usable=10.0,
            pattern=r"(?P<m>mobilenet[-_]?v3[-_]?small|mobilenet[-_]?v3[-_]?large|efficientnet[-_]?b0|resnet[-_]?18|"
@@ -348,6 +362,13 @@ def _alternative(fam: Family, member: Member, device: DeviceProfile, c: FitCard)
         smaller = [m for m in here if 0 < m.rank < member.rank and (speed(fam, m, device)[0] or 0) >= fam.usable]
         if smaller:
             return "Fits better: " + describe(smaller[-1])
+        # Nothing in this family runs well here: another family for the same task might.
+        for other in FAMILIES:
+            if other.task == fam.task and other is not fam:
+                m = best(other, device)
+                rate, _ = speed(other, m, device)
+                if rate and rate >= other.usable:
+                    return f"Runs well here instead: {display(other, m)}: {rate:g} {other.unit}, {m.quality}"
         return None
     bigger = [m for m in here if m.rank > member.rank and (speed(fam, m, device)[0] or 0) >= fam.usable * 2]
     if bigger:
@@ -411,14 +432,15 @@ def generic_card(name: str, task: str, params: int, device: DeviceProfile, *, do
                                                              3 * 0.6 * p * 2 / _bandwidth(device))),
             "image classification": _round(gflops / (2 * p * 197)) if p else None,  # ViT-style: 197 patches
             "embeddings": _round(gflops / (2 * p * EMBED_TOKENS)) if p else None,
-            "object detection": None}[task]
+            "object detection": None}[task]  # detectors differ too much by architecture to guess
     dl = round((download_bytes or params * 4) / GB, 2)
     c = FitCard(model=name, task=task, device=device.name, fits=mem <= budget, memory_gb=mem,
                 budget_gb=round(budget, 1), speed=rate, speed_unit=unit if rate else None,
                 speed_source=source if rate else None, usable=None if rate is None else rate >= usable,
                 download_gb=dl, data_cost=_data_cost(dl), license=license,
                 notes=[f"Not a model family NanoMesh knows: sized from its {p * 1000:.0f}M parameters"
-                       + ("." if rate else "; speed depends on its architecture, so benchmark it.")])
+                       + ("." if rate else "; detectors differ too much by architecture to guess a speed: export it to "
+                                           "ONNX and run nanomesh benchmark on it.")])
     return c
 
 
@@ -428,7 +450,8 @@ def fit(name: str, device: DeviceProfile, *, download_bytes: int | None = None, 
     source says about its format (Hugging Face tags and library)."""
     c = _fit(name, device, download_bytes=download_bytes, license=license, task=task, params=params)
     if c and (why := cannot_run(name, tags, device)):
-        c.fits, c.usable = False, False
+        c.fits = False
+        c.notes = [n for n in c.notes if "best fit" not in n]
         c.notes.insert(0, f"Can't run on {device.name}: {why}. Look for its GGUF, ONNX or original version.")
     return c
 

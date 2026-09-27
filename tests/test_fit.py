@@ -26,6 +26,9 @@ from nanomesh.results import SustainedRun
     ("timm/mobilenetv3_large_100.ra_in1k", "image classifiers", "mobilenet-v3-large"),
     ("google/vit-base-patch16-224", "image classifiers", "vit-base-patch16"),
     ("microsoft/resnet-50", "image classifiers", "resnet-50"),
+    ("PekingU/rtdetr_r101vd_coco_o365", "rt-detr", "101"),
+    ("PekingU/rtdetr_v2_r18vd", "rt-detr", "18"),
+    ("facebook/detr-resnet-50", "detr", "50"),
     ("BAAI/bge-small-en-v1.5", "embeddings", "bge-small-en"),
     ("sentence-transformers/all-MiniLM-L6-v2", "embeddings", "all-minilm-l6-v2"),
     ("nomic-ai/nomic-embed-text-v1.5", "embeddings", "nomic-embed-text"),
@@ -109,8 +112,8 @@ def test_unknown_model_is_sized_from_its_parameters():
     c = fit("someone/swahili-asr", get_device("hp-elitebook-840-g6"), task="speech-to-text", params=300_000_000)
     assert c.task == "speech-to-text" and c.memory_gb == pytest.approx(300e6 * 4 / 1024**3 * 1.1 + 0.25, abs=0.01)
     assert c.speed and "300M parameters" in c.notes[0]
-    det = fit("someone/detector", get_device("hp-elitebook-840-g6"), task="object detection", params=40_000_000)
-    assert det.speed is None and "benchmark it" in det.notes[0]
+    det = fit("hustvl/yolos-small", get_device("hp-elitebook-840-g6"), task="object detection", params=30_700_000)
+    assert det.speed is None and "nanomesh benchmark" in det.notes[0]
 
 
 def test_text_models_get_cards_from_the_planner():
@@ -314,6 +317,8 @@ def test_search_puts_models_this_device_cant_run_last():
     assert [r.id for r in found] == ["Systran/faster-whisper-small", "argmaxinc/whisperkit-coreml"]
     coreml = found[1].card
     assert not coreml.fits and coreml.notes[0].startswith("Can't run on HP EliteBook 840 G6: it's a Core ML model")
+    assert coreml.usable  # its speed is fine; it just can't run here
+    assert not any("best fit" in n for n in coreml.notes)
     mac = catalog.search_task("", "speech", get_device("macbook-air-m1-8gb"), fetch=fake_fetch(listing, {}))
     assert mac[0].id == "argmaxinc/whisperkit-coreml" and mac[0].card.fits
 
@@ -322,3 +327,9 @@ def test_big_counts_are_rounded():
     from nanomesh.fit import _approx
 
     assert [_approx(x) for x in (42.4, 112_608, 1_234_567, 999)] == ["42", "110,000", "1,200,000", "1,000"]
+
+
+def test_a_slow_family_points_to_another_that_runs_well():
+    # RT-DETR is too heavy for this laptop's CPU; YOLO11 does the same task well.
+    c = fit("PekingU/rtdetr_v2_r18vd", get_device("hp-elitebook-840-g6"))
+    assert c.usable is False and c.alternative.startswith("Runs well here instead: yolo11n")
