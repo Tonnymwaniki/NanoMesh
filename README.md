@@ -1,5 +1,7 @@
 # NanoMesh
 
+[![tests](https://github.com/Tonnymwaniki/NanoMesh/actions/workflows/tests.yml/badge.svg)](https://github.com/Tonnymwaniki/NanoMesh/actions/workflows/tests.yml)
+
 **Give NanoMesh a model and a device; it finds the best way to run that model there.**
 
 Quantization itself is a solved problem: llama.cpp, Olive, AIMET and others already do it well.

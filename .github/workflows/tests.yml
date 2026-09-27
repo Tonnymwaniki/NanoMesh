@@ -1,0 +1,35 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows matters most: it's where NanoMesh's first real users run it.
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Test
+        run: python -m pytest -v
+      - name: CLI smoke test
+        # Redirected output on Windows used to crash (cp1252); keep it honest.
+        shell: bash
+        run: |
+          nanomesh --help > /dev/null
+          nanomesh scan-device --json > scan.json
+          nanomesh plan qwen2.5-7b -d hp-elitebook-840-g6 > plan.txt
+          grep -q "Recommended" plan.txt
