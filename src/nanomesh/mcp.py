@@ -36,7 +36,9 @@ INSTRUCTIONS = (
     "to use (with measured speeds where available), list_local_models for models already downloaded, "
     "environment_doctor for installation problems, training_plan before fine-tuning. "
     "analyze_project finds the AI a codebase uses (cloud APIs and local models) and what could run locally "
-    "instead, with the code change. It can also get a model running end to end: search_models (Hugging Face, sized for this machine), "
+    "instead, with the code change. fit_card sizes any model (speech, vision, embeddings, text) for this "
+    "machine; search_models with a task finds them on Hugging Face and Kaggle. It can also get a model running "
+    "end to end: search_models (Hugging Face, sized for this machine), "
     "download_model, benchmark_model, then start_model_server for an OpenAI-compatible endpoint. Downloads and "
     "benchmarks run as jobs: poll job_status. Always tell the user the download size before downloading."
 )
@@ -164,9 +166,24 @@ def _requirements(context: int, min_quality: str, prefer: str) -> Requirements:
         return Requirements(context=context, min_quality=min_quality, prefer=prefer)
 
 
-def search_models(query: str, limit: int = 5, context: int = 4096, min_quality: str = "good",
-                  prefer: str = "balanced") -> dict:
-    from nanomesh.catalog import CatalogError, search
+def search_models(query: str = "", limit: int = 5, context: int = 4096, min_quality: str = "good",
+                  prefer: str = "balanced", task: str | None = None, source: str = "huggingface") -> dict:
+    from nanomesh.catalog import CatalogError, search, search_task, task_name
+
+    try:
+        task = task_name(task) if task else None
+    except CatalogError as e:
+        raise ToolError(str(e)) from None
+    if task and task != "text generation":
+        sources = ("huggingface", "kaggle") if source == "all" else (source,)
+        try:
+            found = search_task(query, task, _local(), limit=min(max(limit, 1), 10), sources=sources)
+        except CatalogError as e:
+            raise ToolError(str(e)) from None
+        return {"device": _local().name, "task": task, "query": query,
+                "results": [r.model_dump(exclude_none=True) for r in found],
+                "note": "Each result's card is its Fit Card on this machine. fit_card(model) explains one in "
+                        "detail; for vision/speech, download the file the card's 'how' names."}
 
     try:
         found = search(query, _local(), limit=min(max(limit, 1), 10), req=_requirements(context, min_quality, prefer))
@@ -216,12 +233,25 @@ def download_model(repo: str, file: str | None = None) -> dict:
 def benchmark_model(path: str, quick: bool = True) -> dict:
     from nanomesh import jobs
     from nanomesh.evaluate import evaluate
+    from nanomesh.runtimes import benchmark_file, can_benchmark
     from nanomesh.stress import WARMUP_SECONDS
     from nanomesh.toolchain import find_toolchain
 
     f = Path(path).expanduser()
+    if can_benchmark(f):
+        device = _local()
+
+        def run_other(h: jobs.Handle) -> dict:
+            h.update(message=f"Benchmarking {f.name}…")
+            run = benchmark_file(f, device)
+            return {**run.model_dump(exclude_none=True), "saved": True,
+                    "note": "Saved: Fit Cards for this model's family on this machine now use it."}
+
+        job = jobs.start("benchmark", f.name, run_other)
+        return {"job_id": job.id, "status": "started", "expected": "under a minute",
+                "next": f"Call job_status(job_id, wait_seconds={MAX_WAIT_S})."}
     if not f.is_file() or f.suffix != ".gguf":
-        raise ToolError(f"Not a .gguf file: {path}")
+        raise ToolError(f"Not a model NanoMesh can benchmark: {path} (.gguf, .onnx, or a whisper.cpp ggml-*.bin)")
     tc = find_toolchain()
     if not tc.bench:
         raise ToolError(LLAMA_MISSING)
@@ -246,6 +276,16 @@ def benchmark_model(path: str, quick: bool = True) -> dict:
 
 def _duration(seconds: float) -> str:
     return f"{seconds / 60:.0f} min" if seconds >= 90 else f"{seconds:.0f} s"
+
+
+def fit_card(model: str, device: str | None = None) -> dict:
+    from nanomesh.fit import fit
+
+    card = fit(model, _device(device))
+    if card is None:
+        raise ToolError(f"NanoMesh can't size '{model}'. Use a family name (whisper-small, yolo11n, "
+                        "mobilenet-v3-large, bge-small-en, qwen2.5-7b), a file, or search_models with a task.")
+    return card.model_dump(exclude_none=True)
 
 
 def job_status(job_id: str | None = None, wait_seconds: float = 0) -> dict:
@@ -391,11 +431,27 @@ TOOLS: dict[str, tuple[Callable[..., dict], str, dict]] = {
         {"path": {"type": "string", "description": "Project folder (the workspace root). Default: current folder."},
          "device": _DEVICE,
          "include_tests": {"type": "boolean", "description": "Also count calls in test files (default false)."}}),
+    "fit_card": (fit_card,
+        "The Fit Card of any model on this machine (or a device from the database): fits in memory?, speed in "
+        "the task's unit (x real-time for speech, images/s for vision, sentences/s for embeddings, tok/s for text; "
+        "measured, calibrated or estimated), quality, download size and data cost, battery, licence, a "
+        "better-fitting model of the same family, and how to run it. Knows Whisper, YOLOv8/YOLO11, image "
+        "classifiers, embedding models and text models.",
+        {"model": {"type": "string", "description": "Model name, repository id or file: whisper-small, "
+                                                    "openai/whisper-base, yolo11n, BAAI/bge-small-en-v1.5, "
+                                                    "qwen2.5-7b, C:/models/x.onnx. A family name alone "
+                                                    "(whisper, yolo11) picks the best size."},
+         "device": _DEVICE}),
     "search_models": (search_models,
-        "Search Hugging Face for GGUF models and size each one for this machine: which file to download "
-        "(recommended), its download size, memory, predicted speed and quality. Matches repository names, so "
-        "turn tasks into model names: coding -> 'qwen2.5 coder 7b', small chat -> 'llama 3.2 3b', 'phi-3 mini'.",
-        {"query": {"type": "string", "description": "Words that must all appear in the repository name."},
+        "Search for models and size each one for this machine. Without task: GGUF text models on Hugging Face "
+        "(which file to download, size, speed, quality); turn tasks into model names: coding -> 'qwen2.5 coder "
+        "7b'. With task (speech, detection, classification, embeddings): models for that task from Hugging "
+        "Face and/or Kaggle, each with its Fit Card, fitting fast-enough ones first; query may be empty.",
+        {"query": {"type": "string", "description": "Words that must all appear in the model's name."},
+         "task": {"type": "string", "enum": ["speech", "detection", "classification", "embeddings", "text"]},
+         "source": {"type": "string", "enum": ["huggingface", "kaggle", "all"],
+                    "description": "Where to search with a task (default huggingface; kaggle needs the user's "
+                                   "Kaggle API token)."},
          "limit": {"type": "integer", "description": "Repositories to return (default 5, max 10)."},
          "context": {"type": "integer", "description": "Context length in tokens (default 4096)."},
          "min_quality": {"type": "string", "description": "Minimum quality: a percentage or a tier (default 'good')."},
@@ -407,10 +463,12 @@ TOOLS: dict[str, tuple[Callable[..., dict], str, dict]] = {
          "file": {"type": "string", "description": "File name or format (e.g. 'Q4_K_M'); default: NanoMesh's "
                                                    "recommendation for this machine."}}),
     "benchmark_model": (benchmark_model,
-        "Measure a GGUF model's speed and memory on this machine with llama.cpp and save it, so plans use real "
-        "numbers. Runs as a job; quick takes ~1 minute, a steady-state run 2-4 minutes.",
-        {"path": {"type": "string", "description": "Path to a .gguf file."},
-         "quick": {"type": "boolean", "description": "Skip the warm-up (default true)."}}),
+        "Measure a model's speed and memory on this machine and save it, so plans and Fit Cards use real "
+        "numbers: GGUF with llama.cpp, ONNX with ONNX Runtime, Whisper with whisper.cpp. Runs as a job; about "
+        "a minute (steady-state GGUF runs 2-4 minutes).",
+        {"path": {"type": "string", "description": "Path to a .gguf file, an .onnx model (vision, embeddings) or "
+                                                   "a whisper.cpp ggml-*.bin."},
+         "quick": {"type": "boolean", "description": "GGUF only: skip the warm-up (default true)."}}),
     "job_status": (job_status,
         "Progress and result of a download or benchmark job (all jobs if no id is given). Set wait_seconds to wait "
         "for the job to finish before answering, instead of calling this repeatedly.",
@@ -433,7 +491,7 @@ TOOLS: dict[str, tuple[Callable[..., dict], str, dict]] = {
     "stop_model_server": (stop_model_server, "Stop a model server NanoMesh started (all if no port is given).",
         {"port": {"type": "integer"}}),
 }
-REQUIRED = {"plan_model": ["model"], "training_plan": ["model"], "search_models": ["query"],
+REQUIRED = {"plan_model": ["model"], "training_plan": ["model"], "fit_card": ["model"],
             "download_model": ["repo"], "benchmark_model": ["path"], "cancel_job": ["job_id"],
             "start_model_server": ["path"]}
 # Most tools only read this machine's state and NanoMesh's own data, so

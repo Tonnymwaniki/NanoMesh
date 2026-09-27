@@ -297,7 +297,13 @@ def benchmark(
     quick: bool = typer.Option(False, "--quick", help="Skip the warm-up: faster, but may catch a laptop's turbo phase."),
     warmup: float = typer.Option(WARMUP_SECONDS, help="Minimum warm-up in seconds before measuring."),
 ):
-    """Measure real speed, memory and quality of GGUF models on this machine."""
+    """Measure real speed, memory and quality of models on this machine: GGUF (llama.cpp), ONNX (vision,
+    embeddings) and whisper.cpp models."""
+    from nanomesh.runtimes import can_benchmark
+
+    if can_benchmark(path):
+        _benchmark_other(path, threads)
+        return
     files = sorted(path.glob("*.gguf")) if path.is_dir() else [path]
     if not files or not all(f.is_file() and f.suffix == ".gguf" for f in files):
         console.print(f"[red]No .gguf files found at {path}")
@@ -329,6 +335,26 @@ def benchmark(
     console.print(bench_table(results))
     if save:
         save.write_text(json.dumps(store.rows(results), indent=2), encoding="utf-8")
+
+
+def _benchmark_other(path: Path, threads: int | None) -> None:
+    from nanomesh.fit import fit
+    from nanomesh.report import fit_card_view
+    from nanomesh.runtimes import benchmark_file
+
+    device = _resolve_device("local")
+    with console.status(f"Benchmarking {path.name}…"):
+        try:
+            run = benchmark_file(path, device, threads)
+        except ToolchainError as e:
+            console.print(f"[red]{e}")
+            raise typer.Exit(1)
+    console.print(f"[green]{run.model_name}[/]: [bold]{run.throughput:g} {run.unit}[/] on {device.name} ({run.runtime})"
+                  + (f" · peak RAM {run.peak_rss_gb:g} GB" if run.peak_rss_gb else ""))
+    if run.note:
+        console.print(f"[dim]{run.note}")
+    if card := fit(path.name, device):
+        console.print(fit_card_view(card))
 
 
 @app.command()
@@ -495,23 +521,74 @@ def project_cmd(
         console.print(project_view(report))
 
 
+@app.command("fit")
+def fit_cmd(
+    model: str = typer.Argument(..., help="A model: whisper-small, yolo11n, openai/whisper-base, a .onnx/.gguf file…"),
+    device_id: str = DeviceOpt,
+    as_json: bool = typer.Option(False, "--json"),
+):
+    """The Fit Card: how well a model fits this device (speech, vision, embeddings and text models)."""
+    from nanomesh.fit import fit
+    from nanomesh.report import fit_card_view
+
+    device = _resolve_device(device_id)
+    card = fit(model, device)
+    if card is None:
+        console.print(f"[red]NanoMesh doesn't know '{model}'. Try a family name (whisper-small, yolov8n, "
+                      "mobilenet-v3-large, bge-small-en, qwen2.5-7b) or: nanomesh search <words> --task <task>")
+        raise typer.Exit(1)
+    if as_json:
+        console.print_json(data=card.model_dump(exclude_none=True))
+    else:
+        console.print(fit_card_view(card))
+
+
+@app.command("config")
+def config_cmd(
+    data_price: float = typer.Option(None, help="What 1 GB of mobile data costs you, e.g. 100."),
+    currency: str = typer.Option("", help="Currency for --data-price, e.g. KES."),
+):
+    """Settings: the price of data, so Fit Cards show what a download costs."""
+    from nanomesh import config
+
+    if data_price is not None:
+        config.set("data_price", {"per_gb": data_price, "currency": currency})
+    console.print_json(data=config.load())
+
+
 @app.command("search")
 def search_cmd(
-    query: list[str] = typer.Argument(..., help="Words in the model's name, e.g. qwen2.5 coder 7b."),
+    query: list[str] = typer.Argument(None, help="Words in the model's name, e.g. qwen2.5 coder 7b."),
     limit: int = typer.Option(5, help="How many repositories to show."),
     context: int = typer.Option(4096, help="Context length to budget for."),
     min_quality: str = typer.Option("good", help="Minimum quality: a percentage or a tier."),
     prefer: str = typer.Option("balanced", help="balanced | quality | speed | size"),
+    task: str = typer.Option(None, help="speech, detection, classification or embeddings (default: text GGUFs)."),
+    source: str = typer.Option("huggingface", help="huggingface, kaggle or all (with --task)."),
     as_json: bool = typer.Option(False, "--json"),
 ):
-    """Search Hugging Face for GGUF models and pick the best file for this device."""
-    from nanomesh.catalog import CatalogError, search
-    from nanomesh.report import search_view
+    """Search Hugging Face (and Kaggle) for models and size each one for this device."""
+    from nanomesh.catalog import CatalogError, search, search_task
+    from nanomesh.report import search_view, task_search_view
 
     device = _resolve_device("local")
+    if task:
+        sources = ("huggingface", "kaggle") if source == "all" else (source,)
+        with console.status("Searching…"):
+            try:
+                found = search_task(" ".join(query or []), task, device, limit=limit, sources=sources)
+            except CatalogError as e:
+                console.print(f"[red]{e}")
+                raise typer.Exit(1)
+        if as_json:
+            console.print_json(data=[r.model_dump(exclude_none=True) for r in found])
+        else:
+            from nanomesh.catalog import task_name
+            console.print(task_search_view(found, task_name(task), device.name))
+        return
     with console.status("Searching Hugging Face…"):
         try:
-            found = search(" ".join(query), device, limit=limit,
+            found = search(" ".join(query or []), device, limit=limit,
                            req=_requirements(context, min_quality, None, None, prefer))
         except CatalogError as e:
             console.print(f"[red]{e}")

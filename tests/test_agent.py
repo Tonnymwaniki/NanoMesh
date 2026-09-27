@@ -160,7 +160,7 @@ def test_mcp_handshake_and_tool_list():
     assert names == {"device_passport", "current_conditions", "plan_model", "list_local_models",
                      "benchmark_results", "environment_doctor", "training_plan", "search_models",
                      "download_model", "benchmark_model", "job_status", "cancel_job", "start_model_server",
-                     "model_server_status", "stop_model_server", "analyze_project"}
+                     "model_server_status", "stop_model_server", "analyze_project", "fit_card"}
     assert all(t["inputSchema"]["type"] == "object" for t in tools["result"]["tools"])
     # Only tools that act are marked as such, so clients confirm those and not the rest.
     acting = {t["name"] for t in tools["result"]["tools"] if not t["annotations"]["readOnlyHint"]}

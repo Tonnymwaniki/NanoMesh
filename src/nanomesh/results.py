@@ -64,6 +64,13 @@ class Result(BaseModel):
     warmup_drop_at_s: float | None = None
     conditions: RunConditions | None = None
     sustained: SustainedRun | None = None
+    # Non-text models (kind "onnx" or "whisper.cpp"): work done per second in
+    # the task's unit (images, sentences, seconds of audio), and the compute one
+    # unit takes, so a run calibrates the device's speed for the whole family.
+    task: str | None = None
+    throughput: float | None = None
+    throughput_unit: str | None = None
+    gflops_per_unit: float | None = None
 
     @property
     def on_battery(self) -> bool:
