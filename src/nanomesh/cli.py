@@ -471,6 +471,30 @@ def models(
         console.print(models_view(found, device.name))
 
 
+@app.command("project")
+def project_cmd(
+    path: Path = typer.Argument(Path("."), help="Project folder (default: the current one)."),
+    device_id: str = DeviceOpt,
+    include_tests: bool = typer.Option(False, "--include-tests", help="Also count calls in test files."),
+    as_json: bool = typer.Option(False, "--json"),
+):
+    """Find the AI in a codebase and what could run locally instead, with the code change."""
+    from nanomesh.project import analyze_project
+    from nanomesh.report import project_view
+
+    device = _resolve_device(device_id)
+    with console.status("Reading the project…"):
+        try:
+            report = analyze_project(path, device, include_tests)
+        except ValueError as e:
+            console.print(f"[red]{e}")
+            raise typer.Exit(1)
+    if as_json:
+        console.print_json(data=report.model_dump(exclude_none=True))
+    else:
+        console.print(project_view(report))
+
+
 @app.command("search")
 def search_cmd(
     query: list[str] = typer.Argument(..., help="Words in the model's name, e.g. qwen2.5 coder 7b."),

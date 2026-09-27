@@ -108,6 +108,16 @@ To do it from VS Code instead, restart the NanoMesh MCP server and ask Copilot (
 *"Find a small chat model for this laptop, download it and start it."* It should search, tell you
 the download size, and ask before downloading and starting the server.
 
+## 9. Scan a project
+
+```sh
+nanomesh project C:\path\to\a\project     # any project that calls OpenAI, Gemini, LangChain…
+```
+
+Or, in VS Code, open a project and ask Copilot: *"What AI does this project use, and could any of it run
+locally on this laptop?"* It should call `analyze_project` with the workspace folder, then offer to download
+and serve the suggested model.
+
 ## Android (Termux)
 
 NanoMesh runs inside [Termux](https://termux.dev) (install it from F-Droid; the

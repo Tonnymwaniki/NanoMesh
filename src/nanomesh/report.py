@@ -420,3 +420,47 @@ def servers_view(servers) -> Group | Text:
         t.add_row(s.model, s.base_url, health(s.port) or "not responding", str(s.context),
                   str(s.threads or "auto"), s.started[:16].replace("T", " "))
     return Group(t, Text("Stop with: nanomesh serve --stop", style="dim"))
+
+
+def project_view(r) -> Group:
+    parts = [Text(f"{r.summary}", style="bold"),
+             Text(f"{r.files_scanned} source files in {r.path} · sized for {r.device}", style="dim")]
+    for f in r.findings:
+        where = {"server": " · runs on a server", "mobile": " · runs in a mobile app"}.get(f.where, "")
+        head = Text(f"\n{f.provider} · {f.task}{where} · {f.calls} call site(s)",
+                    style="bold cyan" if not f.local else "bold")
+        if f.models:
+            head.append(f"  ({', '.join(f.models)})", style="dim")
+        parts.append(head)
+        for loc in f.locations:
+            parts.append(Text(f"  {loc.file}:{loc.line}  {loc.code}", style="dim", overflow="ellipsis", no_wrap=True))
+        if f.calls > len(f.locations):
+            parts.append(Text(f"  … and {f.calls - len(f.locations)} more", style="dim"))
+        a = f.alternative
+        if a:
+            label = "Already local" if f.local else {"server": "Self-host", "mobile": "On the phone"}.get(
+                f.where, "Run locally")
+            line = Text(f"  {label}: ", style="green")
+            line.append(a.model + (f" {a.variant}" if a.variant else ""), style="bold")
+            if a.memory_gb is not None:
+                line.append(f" · {a.memory_gb:g} GB")
+            if a.tokens_per_s:
+                line.append(f" · ~{a.tokens_per_s:g} tok/s ({a.speed_source})")
+            if a.target and a.target != r.device:
+                line.append(f" (sized for {a.target})", style="dim")
+            if a.runs_on:
+                line.append(f" · runs on {len(a.runs_on)} database devices", style="dim")
+            parts.append(line)
+            parts.append(Text(f"  {a.how}", style="dim"))
+        if f.swap:
+            parts.append(Text("  Change:", style="green"))
+            parts.append(Text("\n".join("    " + ln for ln in f.swap.splitlines())))
+        for c in f.caveats:
+            parts.append(Text(f"  ! {c}", style="yellow"))
+    if r.dependencies:
+        deps = "; ".join(f"{k}: {', '.join(v)}" for k, v in r.dependencies.items())
+        parts.append(Text(f"\nAI dependencies: {deps}", style="dim"))
+    if r.model_files:
+        files = ", ".join(f"{m['file']} ({m['size_gb']:g} GB)" for m in r.model_files[:8])
+        parts.append(Text(f"Model files: {files}", style="dim"))
+    return Group(*parts)
