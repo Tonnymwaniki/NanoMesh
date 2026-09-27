@@ -135,6 +135,17 @@ To turn an estimate into a measurement: `pip install onnxruntime`, export or dow
 In VS Code, ask Copilot: *"Which Whisper model should I use for transcription on this laptop, and how many
 hours of audio would a full battery handle?"*
 
+## 11. Datasets
+
+```sh
+nanomesh data search swahili
+nanomesh data card stanfordnlp/imdb
+nanomesh data card C:\path\to\your\data.csv --for-model qwen2.5-1.5b
+```
+
+In VS Code, ask Copilot: *"Find a Swahili dataset for fine-tuning, and tell me if I can train Qwen2.5 1.5B on
+it on this laptop."*
+
 ## Android (Termux)
 
 NanoMesh runs inside [Termux](https://termux.dev) (install it from F-Droid; the

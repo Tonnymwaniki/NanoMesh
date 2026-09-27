@@ -91,6 +91,27 @@ nanomesh benchmark ggml-small.bin          # whisper.cpp (NANOMESH_WHISPER_CPP, 
 Kaggle search needs your Kaggle API token: on kaggle.com go to Settings > API > Create New Token, then
 save `kaggle.json` in `~/.kaggle/`.
 
+### Datasets: what's in it, and what it costs this device
+
+```sh
+nanomesh data search swahili                         # Hugging Face datasets, sized for this machine
+nanomesh data search --task translation --source all # add Kaggle (needs your kaggle.json)
+nanomesh data card stanfordnlp/imdb                  # rows, columns, preview, licence, download, memory
+nanomesh data card ./my-chats.jsonl --for-model qwen2.5-1.5b --epochs 2
+```
+
+A **Dataset Card** is the Fit Card for data. It shows:
+
+- **What's in it:** rows per split, the columns and their types, a preview of the first rows, languages,
+  licence, and the type (text, chat, image, audio, tabular).
+- **What it costs this device:** download size and its data cost, disk space, and memory if loaded
+  whole, with advice to stream it or take a slice when it's too big.
+- **With `--for-model`, fine-tuning:** whether it fits (full, LoRA or QLoRA, from `train-plan`), the
+  tokens, and hours on this device against a free Colab/Kaggle T4 and an A100.
+
+Sizes and previews come from Hugging Face's dataset viewer. Local CSV, TSV, JSONL and JSON files and
+folders work too, and chat-format rows (role/content messages) are recognised.
+
 ### Project: what AI does this codebase use, and what could run locally?
 
 ```sh
@@ -159,6 +180,7 @@ nanomesh mcp --config     # prints ready-to-paste setup for Claude Code, VS Code
 | `training_plan` | Will fine-tuning fit: full, LoRA or QLoRA |
 | `analyze_project` | The AI a codebase uses (file:line) and what could run locally instead, with the code change |
 | `fit_card` | Fit Card of any model (speech, vision, embeddings, text) on this machine or a database device |
+| `search_datasets` / `dataset_card` | Datasets from Hugging Face and Kaggle (or local files): rows, preview, licence, download, memory, and fine-tuning time here vs the cloud |
 | `search_models` | Hugging Face GGUFs sized for this machine; with a task, speech/vision/embedding models from Hugging Face and Kaggle with Fit Cards |
 | `download_model` | Download a model (a background job), resuming and checksum-verified |
 | `benchmark_model` | Measure a GGUF, ONNX or Whisper model here (a background job) so plans and Fit Cards use real numbers |
@@ -344,7 +366,7 @@ Treat estimates as a way to narrow the search; `benchmark` is the ground truth.
 - [x] Search, download and serve: from "I want a model" to a local OpenAI-compatible endpoint
 - [x] Project scan: the AI a codebase uses and what could run locally instead
 - [x] Fit Cards for speech, vision and embedding models; task search on Hugging Face and Kaggle
-- [ ] Datasets: find, size and preview (Hugging Face, Kaggle) and whether training fits this device
+- [x] Datasets: find, size and preview (Hugging Face, Kaggle, local) and whether fine-tuning fits this device
 - [ ] VS Code extension panel over the same tools
 - [ ] Shared benchmark database: upload `results.jsonl` so every user of a device benefits
 - [ ] Android on-device benchmarking, NPU profiles

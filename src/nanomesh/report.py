@@ -467,7 +467,9 @@ def project_view(r) -> Group:
 
 
 def _size(gb: float) -> str:
-    return f"{gb * 1024:.0f} MB" if gb < 0.1 else f"{gb:g} GB"
+    if gb < 0.1:
+        return f"{gb * 1024:.0f} MB"
+    return f"{gb:.2g} GB" if gb < 10 else f"{gb:,.0f} GB"
 
 
 def fit_card_view(c) -> Panel:
@@ -520,3 +522,98 @@ def task_search_view(found, task: str, device_name: str, hint: str | None = None
     if hint:
         footer.insert(0, Text(f"None of these is known to run well here. Runs well: {hint}", style="yellow"))
     return Group(t, *footer)
+
+
+def _hours(h: float) -> str:
+    if h < 1:
+        return f"~{max(1, round(h * 60))} min"
+    return f"~{h:,.0f} h" if h >= 10 else f"~{h:.1f} h"
+
+
+def data_card_view(c) -> Group:
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold")
+    grid.add_column()
+    rows = []
+    what = ", ".join(x for x in (c.modality, "; ".join(c.tasks[:3]) if c.tasks else None) if x)
+    if what:
+        rows.append(("Holds", what + (f" · languages: {', '.join(c.languages[:6])}" if c.languages else "")))
+    if c.rows is not None:
+        splits = ", ".join(f"{k} {v:,}" for k, v in list(c.splits.items())[:6] if v is not None)
+        rows.append(("Rows", f"{c.rows:,}" + (f"  ({splits})" if splits else "")))
+    if c.avg_tokens_per_row:
+        rows.append(("Text", f"~{c.avg_tokens_per_row:,.0f} tokens per row (from the preview)"))
+    if c.download_gb is not None:
+        rows.append(("Download", _size(c.download_gb) + (f" · {c.data_cost}" if c.data_cost else "")))
+    if c.disk_gb is not None:
+        rows.append(("Disk", _size(c.disk_gb) + ("" if c.fits_disk is not False else "  · not enough free space")))
+    if c.memory_gb is not None:
+        rows.append(("Memory", _size(c.memory_gb) + (" loaded whole" if c.fits_memory is not False else
+                                                     " loaded whole · more than this device's budget: stream it")))
+    rows.append(("Licence", c.license or "not stated"))
+    if c.downloads is not None:
+        rows.append(("Downloads", f"{c.downloads:,}"))
+    for k, v in rows:
+        grid.add_row(k, Text(v))
+    parts = [grid]
+    if c.columns:
+        cols = Text("\nColumns: ", style="bold")
+        cols.append(", ".join(f"{col.name} ({col.type})" for col in c.columns[:12])
+                    + (f", … {len(c.columns) - 12} more" if len(c.columns) > 12 else ""))
+        parts.append(cols)
+    if c.preview:
+        t = Table(header_style="bold", title="Preview", title_justify="left", show_lines=True)
+        keys = list(c.preview[0])[:5]
+        for k in keys:
+            t.add_column(k, overflow="fold", max_width=40)
+        for r in c.preview:
+            t.add_row(*[str(r.get(k, "")) for k in keys])
+        parts.append(t)
+    tf = c.training
+    if tf:
+        head = Text(f"\nFine-tuning {tf.model} on it", style="bold")
+        parts.append(head)
+        line = Text()
+        if tf.fits:
+            from nanomesh.training import METHOD_NAMES
+
+            name = METHOD_NAMES.get(tf.method, tf.method)
+            line.append(f"{name[0].upper() + name[1:]} fits in ~{tf.memory_gb:g} GB", style="green")
+        else:
+            line.append("Doesn't fit this device's memory", style="red")
+        line.append(f" · {tf.tokens:,} tokens × {tf.epochs} epoch(s)")
+        parts.append(line)
+        times = [f"here {_hours(tf.hours_here)}"] if tf.hours_here is not None else []
+        times += [f"{k} {_hours(v)}" for k, v in tf.hours_cloud.items()]
+        if times:
+            parts.append(Text("Time: " + " · ".join(times)))
+        for a in tf.advice:
+            parts.append(Text(f"→ {a}", style="yellow"))
+    for a in c.advice:
+        parts.append(Text(f"→ {a}", style="yellow"))
+    if c.how:
+        parts.append(Text(f"Load it: {c.how}", style="dim"))
+    return Panel(Group(*parts), title=f"[bold]{c.id}[/] · {c.source} · on {c.device}", title_align="left",
+                 border_style="green")
+
+
+def data_search_view(cards, device_name: str) -> Group | Text:
+    if not cards:
+        return Text("No datasets found. Try fewer or different words.", style="yellow")
+    t = Table(title=f"Datasets · sized for {device_name}", header_style="bold", title_justify="left")
+    for col in ("Dataset", "Holds", "Rows", "Download", "Memory", "Licence", "Downloads"):
+        t.add_column(col, overflow="fold")
+    for c in cards:
+        mem = Text(_size(c.memory_gb) if c.memory_gb is not None else "—",
+                   style="yellow" if c.fits_memory is False else "")
+        dl = Text((_size(c.download_gb) + (f" · {c.data_cost}" if c.data_cost else "")) if c.download_gb else "—",
+                  style="yellow" if (c.download_gb or 0) > 2 else "")
+        holds = (c.modality or "—").split(" (")[0] + ("" if c.source == "huggingface" else f" · {c.source}")
+        t.add_row(c.id, holds, f"{c.rows:,}" if c.rows is not None else "—", dl, mem, c.license or "—",
+                  f"{c.downloads:,}" if c.downloads is not None else "—")
+    notes = [Text("Details and a preview: nanomesh data card <dataset>  (add --for-model qwen2.5-1.5b "
+                  "for fine-tuning time)", style="dim")]
+    if any((c.download_gb or 0) > 2 for c in cards):
+        notes.insert(0, Text("Yellow downloads are big: the card shows how many rows a 0.5 GB slice holds, and "
+                             "streaming reads them without the full download.", style="yellow"))
+    return Group(t, *notes)
