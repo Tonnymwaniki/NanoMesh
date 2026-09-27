@@ -237,6 +237,17 @@ def sustained_view(r: Result) -> Panel:
         t.append(f" (~{s.tokens_per_battery_pct:,} tokens per 1% of battery)")
     if rc and rc.start.on_battery is False:
         t.append("\nPlugged in: unplug and run again to measure battery life and energy per token.", style="dim")
+    if s.drop_pattern == "step":
+        t.append(f"\nSudden drop at {int(s.drop_at_s // 60)}:{int(s.drop_at_s % 60):02d}: the CPU's short-term turbo "
+                 "budget ran out (typical of Intel laptops). Long sessions run at the lower speed; quick benchmarks "
+                 "taken in the first minute overstate it.")
+    elif s.drop_pattern == "gradual":
+        t.append(f"\nSpeed slid down gradually from {int(s.drop_at_s // 60)}:{int(s.drop_at_s % 60):02d} as the "
+                 "device heated up. Better airflow helps.")
+    if s.points[-1].t_s < 60:
+        t.append("\nThis run was under a minute: run at least 3 minutes (the default) for a reliable reading.",
+                 style="yellow")
+        return Panel(t, title=f"[bold]SUSTAINED · {r.model_name} {r.format}", border_style="cyan")
     verdict = ("green", "Speed held steady.") if s.drop_pct < 10 else \
         ("yellow", "Noticeable slowdown under sustained load.") if s.drop_pct < 25 else \
         ("red", "Heavy throttling: long sessions run much slower than a quick test suggests.")

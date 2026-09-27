@@ -9,13 +9,15 @@ from statistics import median
 
 import psutil
 
-from nanomesh.conditions import read_conditions, summarize
+from nanomesh.conditions import Sampler, read_conditions, summarize
 from nanomesh.hardware import DeviceProfile
 from nanomesh.model import analyze, gguf_size, read_gguf
 from nanomesh.results import Result, SustainedPoint, SustainedRun, gguf_format, now
 from nanomesh.toolchain import Toolchain, bench_rows
 
 TOKENS_PER_ROUND = 64
+MIN_POINTS_FOR_PATTERN = 6
+MIN_SECONDS_FOR_PATTERN = 60
 
 
 def _identity(f: Path, device: DeviceProfile) -> dict:
@@ -26,6 +28,24 @@ def _identity(f: Path, device: DeviceProfile) -> dict:
                 file_size_gb=round(gguf_size(f) / 1024**3, 4))
 
 
+def _drop_shape(points: list[SustainedPoint], burst: float, sustained: float) -> tuple[float | None, str | None]:
+    """When and how speed fell. A sudden step (Intel laptops: the short-term
+    turbo power budget runs out after ~30-60 s) reads differently from a
+    gradual slide as the chassis heats up."""
+    if not burst or sustained >= burst * 0.9:
+        return None, None
+    # Too short to tell a pattern from noise.
+    if len(points) < MIN_POINTS_FOR_PATTERN or points[-1].t_s < MIN_SECONDS_FOR_PATTERN:
+        return None, None
+    threshold = burst - 0.5 * (burst - sustained)  # halfway down
+    i = next((i for i, p in enumerate(points) if p.tokens_per_s <= threshold), None)
+    if i is None or i == 0:
+        return None, None
+    biggest_step = max(points[j - 1].tokens_per_s - points[j].tokens_per_s for j in range(1, len(points)))
+    pattern = "step" if biggest_step >= 0.6 * (burst - sustained) else "gradual"
+    return points[i].t_s, pattern
+
+
 def summarize_sustained(points: list[SustainedPoint], full_wh: float | None) -> SustainedRun:
     speeds = [p.tokens_per_s for p in points]
     burst = round(sum(speeds[:2]) / len(speeds[:2]), 2)
@@ -33,6 +53,7 @@ def summarize_sustained(points: list[SustainedPoint], full_wh: float | None) -> 
     sustained = round(median(tail), 2)
     drop = round(max(0.0, 100 * (1 - sustained / burst)), 1) if burst else 0.0
     run = SustainedRun(points=points, burst_tokens_per_s=burst, sustained_tokens_per_s=sustained, drop_pct=drop)
+    run.drop_at_s, run.drop_pattern = _drop_shape(points, burst, sustained)
 
     watts = [p.discharge_w for p in points if p.discharge_w]
     batt = [p.battery_pct for p in points if p.battery_pct is not None]
@@ -59,14 +80,21 @@ def sustained(tc: Toolchain, f: Path, device: DeviceProfile, minutes: float = 3.
     args = ["-p", "0", "-n", str(TOKENS_PER_ROUND), "-r", "1"] + (["-t", str(threads)] if threads else [])
     points, readings, t0 = [], [], time.monotonic()
     while True:
-        rows = bench_rows(tc, f, args)
+        # Sample *while* generating: right after a round the CPU is already idle
+        # and clocks down, which made a busy CPU look throttled.
+        with Sampler(interval_s=1.5, final_reading=False) as sampler:
+            rows = bench_rows(tc, f, args)
         tok_s = next((r["avg_ts"] for r in rows if r.get("n_gen")), None)
+        during = sampler.readings or [read_conditions(slow_parts=False)]
+        readings += during
+        clocks = [r.clock_pct for r in during if r.clock_pct is not None]
+        temps = [r.temp_c for r in during if r.temp_c is not None]
         # The battery power reading shells out on Windows; only worth it on battery.
-        c = read_conditions(slow_parts=bool(start.on_battery))
-        readings.append(c)
+        end = read_conditions(slow_parts=bool(start.on_battery))
         point = SustainedPoint(t_s=round(time.monotonic() - t0, 1), tokens_per_s=round(tok_s or 0, 2),
-                               temp_c=c.temp_c, clock_pct=c.clock_pct, battery_pct=c.battery_pct,
-                               discharge_w=c.discharge_w)
+                               temp_c=max(temps) if temps else end.temp_c,
+                               clock_pct=round(median(clocks), 1) if clocks else None,
+                               battery_pct=end.battery_pct, discharge_w=end.discharge_w)
         points.append(point)
         log(point)
         if point.t_s >= minutes * 60:

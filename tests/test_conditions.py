@@ -12,8 +12,8 @@ from nanomesh.stress import summarize_sustained
 # Captured from real Windows machines.
 POWERCFG = "Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)\r\n"
 TYPEPERF = '''
-"(PDH-CSV 4.0)","\\\\HP-840\\Processor Information(_Total)\\% Processor Performance"
-"09/27/2026 10:00:01.123","87.531250"
+"(PDH-CSV 4.0)","\\\\HP-840\\Processor Information(0,0)\\% Processor Performance","\\\\HP-840\\Processor Information(0,1)\\% Processor Performance","\\\\HP-840\\Processor Information(0,_Total)\\% Processor Performance","\\\\HP-840\\Processor Information(_Total)\\% Processor Performance"
+"09/27/2026 10:00:01.123","143.531250","22.093750","82.812500","47.125000"
 Exiting, please wait...
 The command completed successfully.
 '''
@@ -22,7 +22,8 @@ The command completed successfully.
 def test_parsers():
     assert cond.parse_powercfg(POWERCFG) == "Balanced"
     assert cond.parse_powercfg("") is None
-    assert cond.parse_typeperf(TYPEPERF) == 87.5
+    # The busiest processor, not the _Total average dragged down by idle cores.
+    assert cond.parse_typeperf(TYPEPERF) == 143.5
     assert cond.parse_typeperf("Error: No valid counters.") is None
     assert cond.parse_pmset_lowpower(" lowpowermode         1\n") is True
     assert cond.parse_pmset_lowpower("nothing") is None
@@ -30,6 +31,9 @@ def test_parsers():
                                       '"DesignedCapacity": 50000}') == {
         "discharge_w": 12.85, "battery_full_wh": 41.2, "battery_design_wh": 50.0}
     assert cond.parse_windows_battery("not json") == {}
+    # Real EliteBook reading: Windows' "unknown" sentinel, shown as -2.1 million watts before the fix.
+    assert cond.parse_windows_battery('{"DischargeRate": -2147483648, "FullChargedCapacity": 41200}') == {
+        "battery_full_wh": 41.2}
 
 
 def test_read_conditions_never_raises():
@@ -128,3 +132,25 @@ def test_old_results_without_conditions_still_load(isolated_home):
         f.write(_row().model_dump_json(exclude={"kind", "conditions", "sustained"}) + "\n")
     [r] = store.load()
     assert r.kind == "benchmark" and r.conditions is None and not r.on_battery
+
+
+# `nanomesh sustained` on the HP EliteBook 840 G6, Qwen2.5-1.5B Q4_K_M, 3 minutes.
+ELITEBOOK_SUSTAINED = [(6, 22.45), (12, 22.23), (18, 21.94), (24, 21.40), (30, 20.67), (37, 20.63), (43, 20.41),
+                       (49, 20.61), (56, 20.31), (62, 20.34), (70, 15.49), (79, 15.68), (88, 15.49), (98, 15.04),
+                       (107, 15.77), (116, 15.17), (125, 15.61), (134, 15.20), (144, 15.56), (153, 15.57),
+                       (162, 15.58), (171, 15.49), (180, 15.92)]
+
+
+def test_real_turbo_budget_step_is_recognised():
+    run = summarize_sustained([SustainedPoint(t_s=t, tokens_per_s=v) for t, v in ELITEBOOK_SUSTAINED], full_wh=None)
+    assert (run.burst_tokens_per_s, run.sustained_tokens_per_s) == (22.34, 15.57)
+    assert run.drop_pct == 30.3
+    assert (run.drop_at_s, run.drop_pattern) == (70, "step")
+
+
+def test_gradual_heating_is_told_apart():
+    speeds = [20.0, 19.4, 18.9, 18.3, 17.8, 17.2, 16.7, 16.1, 15.6, 15.0]
+    run = summarize_sustained(_points(speeds), full_wh=None)
+    assert run.drop_pattern == "gradual"
+    steady = summarize_sustained(_points([20.0, 19.8, 20.1, 19.9, 19.7, 19.9]), full_wh=None)
+    assert steady.drop_pattern is None

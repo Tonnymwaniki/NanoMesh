@@ -85,9 +85,17 @@ def parse_powercfg(output: str | None) -> str | None:
 
 
 def parse_typeperf(output: str | None) -> float | None:
-    """Last sample value from `typeperf <counter> -sc 1` CSV output."""
-    values = re.findall(r'^"[^"]*\d{2}:\d{2}:\d{2}[^"]*","([\d.]+)"', output or "", re.MULTILINE)
-    return round(float(values[-1]), 1) if values else None
+    """Highest value in the data row of `typeperf <counter(*)> -sc 1` output.
+
+    Queried per logical processor: the _Total average is dragged down by idle
+    cores (llama.cpp uses 4 of an i5's 8 threads, so it read ~50% under load),
+    while the busiest core shows the speed the model actually runs at.
+    """
+    rows = [line for line in (output or "").splitlines() if re.match(r'^"[^"]*\d{2}:\d{2}:\d{2}', line)]
+    if not rows:
+        return None
+    values = [float(v) for v in re.findall(r'"([\d.]+)"', rows[-1])]
+    return round(max(values), 1) if values else None
 
 
 def parse_pmset_lowpower(output: str | None) -> bool | None:
@@ -104,8 +112,10 @@ def parse_windows_battery(output: str | None) -> dict:
     if isinstance(data, list):
         data = data[0] if data else {}
     res = {}
-    if data.get("DischargeRate"):
-        res["discharge_w"] = round(data["DischargeRate"] / 1000, 2)  # mW
+    rate = data.get("DischargeRate")
+    # Windows reports "unknown" as -2147483648 (0x80000000); real draws are 0-500 W.
+    if isinstance(rate, (int, float)) and 0 < rate < 500_000:
+        res["discharge_w"] = round(rate / 1000, 2)  # mW
     if data.get("FullChargedCapacity"):
         res["battery_full_wh"] = round(data["FullChargedCapacity"] / 1000, 1)  # mWh
     if data.get("DesignedCapacity"):
@@ -139,7 +149,7 @@ def _windows(c: Conditions, slow_parts: bool) -> None:
     except (ImportError, OSError):
         pass
     # English counter name; on other display languages this returns nothing.
-    c.cpu_perf_pct = parse_typeperf(_run(["typeperf", r"\Processor Information(_Total)\% Processor Performance", "-sc", "1"]))
+    c.cpu_perf_pct = parse_typeperf(_run(["typeperf", r"\Processor Information(*)\% Processor Performance", "-sc", "1"]))
     if slow_parts:
         for k, v in parse_windows_battery(_run(["powershell", "-NoProfile", "-Command", WIN_BATTERY_PS], 10)).items():
             setattr(c, k, v)
@@ -254,9 +264,10 @@ class RunConditions(BaseModel):
 class Sampler:
     """Samples conditions in a background thread while a workload runs."""
 
-    def __init__(self, interval_s: float = 3.0):
+    def __init__(self, interval_s: float = 3.0, final_reading: bool = True):
         self.interval_s = interval_s
-        self.start = read_conditions()
+        self.final_reading = final_reading
+        self.start = read_conditions(slow_parts=final_reading)
         self.readings: list[Conditions] = []
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -274,7 +285,8 @@ class Sampler:
     def __exit__(self, *exc) -> None:
         self._stop.set()
         self._thread.join(timeout=10)
-        self.readings.append(read_conditions())  # includes the slower battery-power reading
+        if self.final_reading:
+            self.readings.append(read_conditions())  # includes the slower battery-power reading
 
     def summary(self) -> RunConditions:
         return summarize(self.start, self.readings, time.monotonic() - self._t0)

@@ -80,6 +80,8 @@ class SustainedRun(BaseModel):
     joules_per_token: float | None = None
     battery_hours: float | None = None  # full charge at this load
     tokens_per_battery_pct: float | None = None
+    drop_at_s: float | None = None  # when speed fell halfway to its sustained level
+    drop_pattern: str | None = None  # "step" (turbo budget ran out) or "gradual" (heat)
 
 
 def home() -> Path:
