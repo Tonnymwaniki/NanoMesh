@@ -5,7 +5,7 @@ from nanomesh import results as store
 from nanomesh.conditions import Conditions, advice, summarize
 from nanomesh.devices import get_device
 from nanomesh.model import analyze
-from nanomesh.planner import plan
+from nanomesh.planner import add_live_advice, plan
 from nanomesh.results import SustainedPoint
 from nanomesh.stress import summarize_sustained
 
@@ -200,6 +200,16 @@ def test_real_runs_show_battery_only_costs_turbo():
     assert bc.sustained_loss_pct == 5.1  # 14.77 vs 15.57 tok/s: small next to the 33% burst loss
     advice = plan(model, device, evidence=store.evidence(device, model, rows)).advice
     assert any("only loses its first-minute turbo boost" in a for a in advice)
+
+    # Unplugged, asking about a different variant (Copilot asked about Q8_0 and
+    # answered "I don't have a measured battery-speed figure"): the measured
+    # cost replaces the generic "many laptops..." line, and appears once.
+    ev = store.evidence(device, model, rows)
+    p = plan(model, device, evidence=ev)
+    add_live_advice(p, ev, Conditions(on_battery=True))
+    battery = [a for a in p.advice if "battery" in a.lower()]
+    assert len(battery) == 1 and battery[0].startswith("Running on battery right now. On battery this device only")
+    assert "14.77 vs 15.57" in battery[0] and "other models" in battery[0]
 
 
 def test_warm_up_with_a_minimum_gets_past_turbo(monkeypatch):

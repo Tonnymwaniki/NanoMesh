@@ -24,7 +24,7 @@ from nanomesh.conditions import read_conditions
 from nanomesh.devices import get_device, recognise
 from nanomesh.hardware import DeviceProfile, scan_device
 from nanomesh.model import analyze
-from nanomesh.planner import QUALITY_TIERS, Plan, Requirements, plan
+from nanomesh.planner import QUALITY_TIERS, Plan, Requirements, add_live_advice, battery_advice, plan
 
 PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"]
 INSTRUCTIONS = (
@@ -104,7 +104,8 @@ def device_passport(device: str | None = None) -> dict:
 
 def current_conditions() -> dict:
     c = read_conditions()
-    return {"conditions": dump_conditions(c), "advice": condition_advice(c)}
+    note = battery_advice(store.battery_cost(_local()))
+    return {"conditions": dump_conditions(c), "advice": condition_advice(c, battery_note=note)}
 
 
 def plan_model(model: str, device: str | None = None, context: int = 4096, min_quality: str = "good",
@@ -117,9 +118,10 @@ def plan_model(model: str, device: str | None = None, context: int = 4096, min_q
         if min_quality not in QUALITY_TIERS:
             raise ToolError(f"min_quality must be a percentage or one of {QUALITY_TIERS}") from None
         req = Requirements(context=context, min_quality=min_quality, prefer=prefer)
-    p = plan(info, dev, req, store.evidence(dev, info))
+    ev = store.evidence(dev, info)
+    p = plan(info, dev, req, ev)
     if dev.is_local:
-        p.advice += condition_advice(read_conditions())
+        add_live_advice(p, ev, read_conditions())
     return _plan_summary(p)
 
 

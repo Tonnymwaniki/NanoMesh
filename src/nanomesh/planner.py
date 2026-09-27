@@ -296,19 +296,41 @@ def _choose(ok: list[Variant], prefer: str) -> Variant | None:
     return max(ok, key=lambda v: (QUALITY_TIERS.index(v.quality), -v.format.bits_per_weight))
 
 
+def battery_advice(bc: BatteryCost | None) -> str | None:
+    """What running on battery costs this device, from its measured sustained runs."""
+    if bc and bc.sustained_loss_pct < 10 <= bc.burst_loss_pct:
+        return (f"On battery this device only loses its first-minute turbo boost ({bc.model}: "
+                f"{bc.battery_sustained:g} vs {bc.plugged_sustained:g} tok/s sustained, measured). "
+                "Long sessions run about as fast unplugged; expect the same for other models.")
+    if bc and bc.sustained_loss_pct >= 10:
+        return (f"On battery this device runs {bc.sustained_loss_pct:g}% slower even in long sessions "
+                f"({bc.model}: {bc.battery_sustained:g} vs {bc.plugged_sustained:g} tok/s, measured; expect "
+                "the same for other models). Plug in.")
+    if bc:
+        return (f"On battery this device runs about as fast as plugged in ({bc.model}: {bc.battery_sustained:g} "
+                f"vs {bc.plugged_sustained:g} tok/s sustained, measured).")
+    return None
+
+
+def add_live_advice(p: Plan, ev: Evidence, c) -> None:
+    """Append what's holding the device back right now (c: conditions.Conditions).
+    On battery, the measured battery cost moves to the front of that advice
+    instead of appearing twice."""
+    from nanomesh.conditions import advice
+
+    note = battery_advice(ev.battery_cost)
+    if c.on_battery and note in p.advice:
+        p.advice.remove(note)
+    p.advice += advice(c, battery_note=note)
+
+
 def _tuning_advice(ev: Evidence) -> list[str]:
     out = []
     if ev.best_threads and ev.best_threads_gain_pct and ev.best_threads_gain_pct >= 5:
         out.append(f"Run with {ev.best_threads} threads (llama.cpp: -t {ev.best_threads}): measured "
                    f"{ev.best_threads_gain_pct:g}% faster than the default on this device.")
-    bc = ev.battery_cost
-    if bc and bc.sustained_loss_pct < 10 <= bc.burst_loss_pct:
-        out.append(f"On battery this device only loses its first-minute turbo boost ({bc.model}: "
-                   f"{bc.battery_sustained:g} vs {bc.plugged_sustained:g} tok/s sustained, measured). "
-                   "Long sessions run about as fast unplugged.")
-    elif bc and bc.sustained_loss_pct >= 10:
-        out.append(f"On battery this device runs {bc.sustained_loss_pct:g}% slower even in long sessions "
-                   f"({bc.model}: {bc.battery_sustained:g} vs {bc.plugged_sustained:g} tok/s, measured). Plug in.")
+    if note := battery_advice(ev.battery_cost):
+        out.append(note)
     if ev.sustained_drop_pct is not None and ev.sustained_drop_pct >= 15:
         out.append(f"Speed fell {ev.sustained_drop_pct:g}% after minutes of generation on this device (heat or "
                    "power limits): expect less than the quick benchmark in long sessions.")

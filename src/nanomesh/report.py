@@ -202,7 +202,7 @@ def results_table(results: list[Result]) -> Table:
     return t
 
 
-def conditions_view(c: Conditions) -> Panel:
+def conditions_view(c: Conditions, battery_note: str | None = None) -> Panel:
     grid = Table.grid(padding=(0, 2))
     grid.add_column(style="bold")
     grid.add_column()
@@ -227,7 +227,7 @@ def conditions_view(c: Conditions) -> Panel:
         if v:
             grid.add_row(k, v)
     notes = Text()
-    for a in condition_advice(c):
+    for a in condition_advice(c, battery_note=battery_note):
         notes.append(f"\n→ {a}", style="yellow")
     if not notes:
         notes.append("\n✓ Nothing in the current conditions should slow a model down.", style="green")
