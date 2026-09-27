@@ -253,3 +253,34 @@ def test_steady_results_beat_quick_ones():
     assert ev.speeds["Q4_K_M"] == 15.5
     # Calibration ignores the quick run's turbo-inflated bandwidth too.
     assert ev.effective_bandwidth_gbps == pytest.approx(15.5 * 1.04 * 1.0737, abs=0.1)
+
+
+def test_rewarm_covers_the_learned_turbo_window():
+    from nanomesh.stress import WarmUp, rewarm_seconds
+
+    # EliteBook-like: turbo fell away at ~70 s on the hard-working first file.
+    turbo = WarmUp(seconds=110, rounds=11, burst_tokens_per_s=22.4, settled_tokens_per_s=15.5, settled=True,
+                   drop_at_s=70)
+    assert rewarm_seconds(turbo, 90) == 90  # capped at the full warm-up
+    assert rewarm_seconds(turbo.model_copy(update={"drop_at_s": 30}), 90) == 55  # 30 * 1.5 + 10
+    # No drop on the hardest file: the device doesn't throttle; a short re-warm will do.
+    flat = turbo.model_copy(update={"drop_at_s": None, "burst_tokens_per_s": 15.6})
+    assert rewarm_seconds(flat, 90) == 20
+
+
+def test_warm_up_reports_the_turbo_window(monkeypatch):
+    from nanomesh import stress
+
+    speeds = iter([22.4, 22.2, 21.9, 21.4, 20.7, 20.6, 20.4, 15.5, 15.6, 15.5, 15.7])
+    clock = iter(range(10, 1000, 10))
+    monkeypatch.setattr(stress.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(stress, "bench_rows", lambda tc, f, args: [{"n_gen": 32, "avg_ts": next(speeds)}])
+    warm = stress.warm_up(tc=None, f=None, min_seconds=90)
+    assert warm.drop_at_s == 80  # 8th round (10 s each) is the first at or below halfway (18.95)
+    # The real FP16 run (7.7 cold, 6.9 steady) dips only 10%, and early: a
+    # memory-bound model understates the turbo window. That's why evaluate()
+    # warms up the smallest, hardest-working file first.
+    speeds = iter([7.7, 7.4, 7.1, 6.9, 6.9, 7.0, 6.9, 6.9, 6.9, 6.9, 6.9, 6.9])
+    clock = iter(range(10, 1000, 10))
+    warm = stress.warm_up(tc=None, f=None, min_seconds=90)
+    assert warm.drop_at_s == 30 and warm.drop_at_s < 80
