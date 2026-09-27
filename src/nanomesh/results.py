@@ -216,6 +216,11 @@ def evidence(device: DeviceProfile, model: ModelInfo, results: list[Result] | No
                     calibration_runs=len(runs))
 
 
+def battery_cost(device: DeviceProfile) -> BatteryCost | None:
+    """What battery costs this device, from its sustained runs (any model)."""
+    return _battery_cost([r for r in load() if r.device_key == device.key])
+
+
 def _battery_cost(results: list[Result]) -> BatteryCost | None:
     """Compare the latest sustained runs of one model plugged in vs on battery."""
     runs = [r for r in results if r.kind == "sustained" and r.sustained and r.conditions

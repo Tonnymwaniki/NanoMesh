@@ -326,11 +326,14 @@ def summarize(start: Conditions, readings: list[Conditions], duration_s: float) 
 HOT_C = 90.0
 
 
-def advice(c: Conditions, *, busy: bool = False) -> list[str]:
+def advice(c: Conditions, *, busy: bool = False, battery_note: str | None = None) -> list[str]:
     """What to change about the current conditions. busy=True when the
-    readings were taken under load (idle CPUs downclock on purpose)."""
+    readings were taken under load (idle CPUs downclock on purpose).
+    battery_note: what battery measurably costs this device, if known."""
     out = []
-    if c.on_battery:
+    if c.on_battery and battery_note:
+        out.append(f"Running on battery right now. {battery_note}")
+    elif c.on_battery:
         out.append("Running on battery: many laptops limit turbo boost on battery, so short tasks run slower. "
                    "Benchmark plugged in so results are comparable; `nanomesh sustained` on both shows what "
                    "battery really costs on this machine.")

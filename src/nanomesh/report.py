@@ -202,7 +202,7 @@ def results_table(results: list[Result]) -> Table:
     return t
 
 
-def conditions_view(c: Conditions) -> Panel:
+def conditions_view(c: Conditions, battery_note: str | None = None) -> Panel:
     grid = Table.grid(padding=(0, 2))
     grid.add_column(style="bold")
     grid.add_column()
@@ -227,7 +227,7 @@ def conditions_view(c: Conditions) -> Panel:
         if v:
             grid.add_row(k, v)
     notes = Text()
-    for a in condition_advice(c):
+    for a in condition_advice(c, battery_note=battery_note):
         notes.append(f"\n→ {a}", style="yellow")
     if not notes:
         notes.append("\n✓ Nothing in the current conditions should slow a model down.", style="green")
@@ -331,9 +331,12 @@ def models_view(found, device_name: str) -> Table | Text:
     for col in ("Model", "Source", "Type", "Size", "Fits", "Best variant here"):
         t.add_column(col, overflow="fold")
     for m in found:
-        kind = m.format or m.kind
-        t.add_row(m.name, m.source, kind, f"{m.size_gb:g} GB", Text("yes", style="green") if m.fits else
-                  Text("no", style="red"), m.recommended_note or "—")
+        kind = (m.format or m.kind) + (f" · {m.parts} parts" if m.parts > 1 else "")
+        if m.missing_parts:
+            fits = Text(f"{m.missing_parts} part(s) missing", style="red")
+        else:
+            fits = Text("yes", style="green") if m.fits else Text("no", style="red")
+        t.add_row(m.name, m.source, kind, f"{m.size_gb:g} GB", fits, m.recommended_note or "—")
     return t
 
 

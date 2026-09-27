@@ -14,7 +14,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from nanomesh.hardware import GB, DeviceProfile
-from nanomesh.model import _analyze_gguf, analyze, gguf_parts, gguf_size, is_later_split_part, read_gguf
+from nanomesh.model import SPLIT_RE, _analyze_gguf, analyze, gguf_parts, gguf_size, is_later_split_part, read_gguf
 from nanomesh.planner import Requirements, memory_budgets, plan
 from nanomesh.results import evidence, gguf_format
 
@@ -30,6 +30,8 @@ class FoundModel(BaseModel):
     format: str | None = None  # GGUF quantization, e.g. Q4_K_M
     params: int
     size_gb: float
+    parts: int = 1  # split GGUFs: how many files make up the model
+    missing_parts: int = 0  # parts not on disk: llama.cpp can't load it until they're downloaded
     fits: bool  # does this exact file fit the device's memory budget?
     recommended: str | None = None  # best variant of this model for the device
     recommended_note: str | None = None
@@ -94,13 +96,24 @@ def _is_gguf(path: Path) -> bool:
 
 def _describe(name: str, path: Path, source: str, device: DeviceProfile, context: int) -> FoundModel | None:
     is_gguf = path.is_file() and _is_gguf(path)
+    if is_gguf and (missing := [p for p in gguf_parts(path) if not p.is_file()]):
+        # An interrupted download: list it so the user knows what to fetch.
+        try:
+            meta, first_params = read_gguf(path)
+        except (ValueError, OSError, KeyError, struct.error, UnicodeDecodeError):
+            return None
+        return FoundModel(name=name, path=str(path), source=source, kind="gguf", format=gguf_format(meta, path),
+                          params=first_params, size_gb=round(gguf_size(path) / GB, 2),
+                          parts=len(gguf_parts(path)), missing_parts=len(missing), fits=False,
+                          recommended_note="Incomplete: download " + ", ".join(p.name for p in missing))
     try:
         # Ollama blobs are GGUF files without the extension.
         info = _analyze_gguf(gguf_parts(path)[0]) if is_gguf else analyze(str(path))
     except (ValueError, OSError, KeyError, struct.error, UnicodeDecodeError):
         return None
-    fmt, size = None, (info.disk_bytes or 0)
+    fmt, size, parts = None, (info.disk_bytes or 0), 1
     if is_gguf:
+        parts = len(gguf_parts(path))
         meta, _ = read_gguf(gguf_parts(path)[0])
         fmt, size = gguf_format(meta, path), gguf_size(path)
     budget = max(b.memory_gb for b in memory_budgets(device))
@@ -109,7 +122,7 @@ def _describe(name: str, path: Path, source: str, device: DeviceProfile, context
     rec = next((v for v in p.variants if v.format.name == p.recommended), None)
     return FoundModel(
         name=name, path=str(path), source=source, kind="gguf" if is_gguf else "safetensors", format=fmt,
-        params=info.params, size_gb=round(size / GB, 2), fits=size / GB + kv + 0.3 <= budget,
+        params=info.params, size_gb=round(size / GB, 2), parts=parts, fits=size / GB + kv + 0.3 <= budget,
         recommended=p.recommended,
         recommended_note=(f"{rec.format.label} · {rec.total_memory_gb:.1f} GB"
                           + (f" · {rec.tokens_per_s:g} tok/s" if rec and rec.tokens_per_s else "")) if rec else
@@ -141,7 +154,9 @@ def find_models(device: DeviceProfile, extra: list[Path] | None = None, context:
             add(root.stem, root, source)
             continue
         for cand in _walk(root):
-            name = cand.stem if cand.is_file() else cand.name
+            # qwen2.5-7b-q4_k_m-00001-of-00002.gguf -> qwen2.5-7b-q4_k_m
+            name = SPLIT_RE.sub("", cand.name) if cand.is_file() else cand.name
+            name = name.removesuffix(".gguf")
             if source == "huggingface" and "snapshots" in cand.parts:
                 # models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/<hash> -> Qwen/Qwen2.5-1.5B-Instruct
                 repo = next((p for p in cand.parts if p.startswith("models--")), cand.name)

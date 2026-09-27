@@ -11,7 +11,8 @@ from nanomesh import __version__
 from nanomesh.devices import get_device, load_devices, recognise, search_devices
 from nanomesh.hardware import DeviceProfile, scan_device
 from nanomesh.model import analyze, gguf_parts, gguf_size
-from nanomesh.planner import FORMATS_BY_NAME, QUALITY_TIERS, Plan, Requirements, free_ram_warning, plan
+from nanomesh.planner import (FORMATS_BY_NAME, QUALITY_TIERS, Plan, Requirements, add_live_advice, battery_advice,
+                              free_ram_warning, plan)
 from nanomesh import results as store
 from nanomesh.evaluate import evaluate
 from nanomesh.stress import WARMUP_SECONDS
@@ -95,7 +96,7 @@ def scan_device_cmd(
         console.print_json(data=data)
     else:
         console.print(device_passport(device))
-        console.print(conditions_view(now))
+        console.print(conditions_view(now, battery_advice(store.battery_cost(device))))
 
 
 @app.command()
@@ -137,11 +138,11 @@ def plan_cmd(
 ):
     """Recommend the best variant of a model for a device, using measurements where available."""
     info, device = _analyze(model), _resolve_device(device_id)
-    p = plan(info, device, _requirements(context, min_quality, min_speed, ram, prefer),
-             store.evidence(device, info))
+    ev = store.evidence(device, info)
+    p = plan(info, device, _requirements(context, min_quality, min_speed, ram, prefer), ev)
     if device.is_local:
         # The plan assumes the device at its best; say what's holding it back right now.
-        p.advice += condition_advice(read_conditions())
+        add_live_advice(p, ev, read_conditions())
     if as_json:
         console.print_json(data=p.model_dump(exclude_none=True))
     else:
@@ -383,7 +384,7 @@ def sustained(
 
     f, tc = _one_gguf(path)
     device = _resolve_device("local")
-    for a in condition_advice(read_conditions()):
+    for a in condition_advice(read_conditions(), battery_note=battery_advice(store.battery_cost(device))):
         console.print(f"[yellow]→ {a}")
     console.print(f"Generating with {f.name} for {minutes:g} min. Leave the machine alone meanwhile.\n")
 

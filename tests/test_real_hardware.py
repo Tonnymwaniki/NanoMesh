@@ -55,7 +55,10 @@ def test_calibrated_speeds_respect_the_compute_ceiling(elitebook_results):
     assert q5.speed_source == "calibrated" and q4.speed_source == "measured"
     # INT3 and INT4 measured the same speed, so INT5 can't be predicted faster.
     assert q5.tokens_per_s <= q4.tokens_per_s * 1.05
-    assert any("no faster than the next step up" in a for a in p.advice)
+    # Named with numbers: Copilot read "INT4 is no faster than the next step up"
+    # as "no faster than INT8", which measured 10.4 against INT4's 15.1.
+    assert any(a.startswith(f"Speed tops out at INT5 ({q5.tokens_per_s:g} tok/s)") and "INT4 15.09" in a
+               for a in p.advice)
 
 
 def test_small_model_quality_loss_is_calibrated(elitebook_results):
@@ -111,3 +114,9 @@ def test_split_7b_measurement_is_used_by_plan(elitebook_results):
     assert ev.compute_gparams_per_s == pytest.approx(3.96 * 7.6156, abs=0.1)
     q3 = _v(plan(model, device, evidence=ev), "Q3_K_M")
     assert q3.speed_source == "calibrated" and q3.tokens_per_s >= 3.96
+    # The 7B streamed weights slower than the 1.5B did, so its bigger formats
+    # can't be predicted faster than the Q4_K_M it measured (was 4.2 for Q5_K_M).
+    p = plan(model, device, evidence=ev)
+    q5 = _v(p, "Q5_K_M")
+    assert q5.speed_source == "calibrated" and q5.tokens_per_s == pytest.approx(3.4, abs=0.1)
+    assert p.recommended == "Q4_K_M"

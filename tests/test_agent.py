@@ -86,6 +86,7 @@ def test_models_found_in_hf_cache_lm_studio_and_ollama(tmp_path, monkeypatch):
     write_gguf(lms / "tiny-Q4_K_M.gguf", file_type=15)
     write_gguf(lms / "big-Q8_0-00001-of-00002.gguf", file_type=7)
     write_gguf(lms / "big-Q8_0-00002-of-00002.gguf", file_type=7)
+    write_gguf(lms / "half-Q4_K_M-00001-of-00003.gguf", file_type=15)  # download interrupted
 
     ollama = home / ".ollama/models"
     (ollama / "blobs").mkdir(parents=True)
@@ -96,7 +97,12 @@ def test_models_found_in_hf_cache_lm_studio_and_ollama(tmp_path, monkeypatch):
                                                 "digest": "sha256:deadbeef"}]}))
 
     found = {m.name: m for m in find_models(get_device("hp-elitebook-840-g6"), [])}
-    assert set(found) == {"Qwen/Qwen2.5-0.5B", "tiny-Q4_K_M", "big-Q8_0-00001-of-00002", "llama3.2:1b"}
+    assert set(found) == {"Qwen/Qwen2.5-0.5B", "tiny-Q4_K_M", "big-Q8_0", "half-Q4_K_M", "llama3.2:1b"}
+    assert (found["big-Q8_0"].parts, found["big-Q8_0"].missing_parts) == (2, 0)
+    half = found["half-Q4_K_M"]
+    assert (half.parts, half.missing_parts, half.fits) == (3, 2, False)
+    assert "half-Q4_K_M-00002-of-00003.gguf" in half.recommended_note
+    assert found["tiny-Q4_K_M"].parts == 1
     assert found["Qwen/Qwen2.5-0.5B"].source == "huggingface" and found["Qwen/Qwen2.5-0.5B"].kind == "safetensors"
     assert found["tiny-Q4_K_M"].format == "Q4_K_M" and found["tiny-Q4_K_M"].fits
     assert found["llama3.2:1b"].source == "ollama" and found["llama3.2:1b"].kind == "gguf"
@@ -153,6 +159,9 @@ def test_mcp_handshake_and_tool_list():
     assert names == {"device_passport", "current_conditions", "plan_model", "list_local_models",
                      "benchmark_results", "environment_doctor", "training_plan"}
     assert all(t["inputSchema"]["type"] == "object" for t in tools["result"]["tools"])
+    # Nothing changes the machine: clients may skip the confirmation prompt.
+    assert all(t["annotations"]["readOnlyHint"] and not t["annotations"]["destructiveHint"]
+               for t in tools["result"]["tools"])
 
 
 def test_mcp_unknown_version_gets_latest():

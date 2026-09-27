@@ -193,13 +193,16 @@ def _decode_speed(weights_gb: float, kv_gb: float, effective_gbps: float) -> flo
 
 
 def _speed(fmt: QuantFormat, weights: float, kv: float, budget: Budget, primary: bool,
-           ev: Evidence, params: int) -> tuple[float | None, str | None]:
+           ev: Evidence, params: int, model_bandwidth: float | None = None) -> tuple[float | None, str | None]:
     # Benchmarks run on the device's preferred placement, so measurements and
     # calibration only apply to variants that land there too.
     if primary and fmt.name in ev.speeds:
         return ev.speeds[fmt.name], "measured"
     if primary and ev.effective_bandwidth_gbps:
-        speed = _decode_speed(weights, kv, ev.effective_bandwidth_gbps)
+        # A model's own runs are the better guide: a 7B model doesn't reach the
+        # bandwidth a small one did, so its other formats can't either.
+        bandwidth = min(ev.effective_bandwidth_gbps, model_bandwidth or ev.effective_bandwidth_gbps)
+        speed = _decode_speed(weights, kv, bandwidth)
         if ev.compute_gparams_per_s:
             # Low-bit formats can outrun the CPU's ability to unpack them.
             speed = min(speed, round(ev.compute_gparams_per_s / (params / 1e9), 1))
@@ -226,11 +229,17 @@ def plan(model: ModelInfo, device: DeviceProfile, req: Requirements | None = Non
     min_pct = req.min_quality_pct if req.min_quality_pct is not None else TIER_FLOORS[req.min_quality]
     fp16_gb = model.params * 2 / GB
 
+    # Bandwidth this model's measured formats achieved (tok/s x bytes per token).
+    model_bw = max((ev.speeds[f.name] * (w + kv * 0.5) * GB / 1e9
+                    for f in FORMATS if f.name in ev.speeds
+                    for w, kv, _ in [estimate(model, f, req.context)]), default=None)
+
     variants = []
     for fmt in FORMATS:
         weights, kv, total = estimate(model, fmt, req.context)
         budget = next((b for b in budgets if total <= b.memory_gb), None)
-        speed, source = _speed(fmt, weights, kv, budget, budget is budgets[0], ev, model.params) if budget else (None, None)
+        speed, source = (_speed(fmt, weights, kv, budget, budget is budgets[0], ev, model.params, model_bw)
+                         if budget else (None, None))
         measured_q = fmt.name in ev.quality
         if measured_q:
             quality_pct, q_source = min(ev.quality[fmt.name], 100.0), "measured"
@@ -287,19 +296,41 @@ def _choose(ok: list[Variant], prefer: str) -> Variant | None:
     return max(ok, key=lambda v: (QUALITY_TIERS.index(v.quality), -v.format.bits_per_weight))
 
 
+def battery_advice(bc: BatteryCost | None) -> str | None:
+    """What running on battery costs this device, from its measured sustained runs."""
+    if bc and bc.sustained_loss_pct < 10 <= bc.burst_loss_pct:
+        return (f"On battery this device only loses its first-minute turbo boost ({bc.model}: "
+                f"{bc.battery_sustained:g} vs {bc.plugged_sustained:g} tok/s sustained, measured). "
+                "Long sessions run about as fast unplugged; expect the same for other models.")
+    if bc and bc.sustained_loss_pct >= 10:
+        return (f"On battery this device runs {bc.sustained_loss_pct:g}% slower even in long sessions "
+                f"({bc.model}: {bc.battery_sustained:g} vs {bc.plugged_sustained:g} tok/s, measured; expect "
+                "the same for other models). Plug in.")
+    if bc:
+        return (f"On battery this device runs about as fast as plugged in ({bc.model}: {bc.battery_sustained:g} "
+                f"vs {bc.plugged_sustained:g} tok/s sustained, measured).")
+    return None
+
+
+def add_live_advice(p: Plan, ev: Evidence, c) -> None:
+    """Append what's holding the device back right now (c: conditions.Conditions).
+    On battery, the measured battery cost moves to the front of that advice
+    instead of appearing twice."""
+    from nanomesh.conditions import advice
+
+    note = battery_advice(ev.battery_cost)
+    if c.on_battery and note in p.advice:
+        p.advice.remove(note)
+    p.advice += advice(c, battery_note=note)
+
+
 def _tuning_advice(ev: Evidence) -> list[str]:
     out = []
     if ev.best_threads and ev.best_threads_gain_pct and ev.best_threads_gain_pct >= 5:
         out.append(f"Run with {ev.best_threads} threads (llama.cpp: -t {ev.best_threads}): measured "
                    f"{ev.best_threads_gain_pct:g}% faster than the default on this device.")
-    bc = ev.battery_cost
-    if bc and bc.sustained_loss_pct < 10 <= bc.burst_loss_pct:
-        out.append(f"On battery this device only loses its first-minute turbo boost ({bc.model}: "
-                   f"{bc.battery_sustained:g} vs {bc.plugged_sustained:g} tok/s sustained, measured). "
-                   "Long sessions run about as fast unplugged.")
-    elif bc and bc.sustained_loss_pct >= 10:
-        out.append(f"On battery this device runs {bc.sustained_loss_pct:g}% slower even in long sessions "
-                   f"({bc.model}: {bc.battery_sustained:g} vs {bc.plugged_sustained:g} tok/s, measured). Plug in.")
+    if note := battery_advice(ev.battery_cost):
+        out.append(note)
     if ev.sustained_drop_pct is not None and ev.sustained_drop_pct >= 15:
         out.append(f"Speed fell {ev.sustained_drop_pct:g}% after minutes of generation on this device (heat or "
                    "power limits): expect less than the quick benchmark in long sessions.")
@@ -310,12 +341,16 @@ def _no_faster_advice(variants: list[Variant]) -> list[str]:
     """Flag low-bit variants that measured/calibrated no faster than the next
     step up: on CPU-bound devices they only cost quality."""
     known = [v for v in variants if v.fits and v.speed_source in ("measured", "calibrated")]
-    slower = [low.format.label for high, low in zip(known, known[1:])
-              if low.tokens_per_s <= high.tokens_per_s * 1.05 and low.quality_pct < high.quality_pct]
-    if not slower:
+    pairs = [(high, low) for high, low in zip(known, known[1:])
+             if low.tokens_per_s <= high.tokens_per_s * 1.05 and low.quality_pct < high.quality_pct]
+    if not pairs:
         return []
-    return [f"{', '.join(slower)} {'is' if len(slower) == 1 else 'are'} no faster than the next step up on "
-            "this device (the CPU, not memory, is the limit), so going lower only costs quality."]
+    # Name the variant where speed tops out and give the numbers, so neither a
+    # person nor an agent reads "no faster" as "no faster than the recommendation".
+    top, slower = pairs[0][0], [low for _, low in pairs]
+    speeds = ", ".join(f"{v.format.label} {v.tokens_per_s:g}" for v in slower)
+    return [f"Speed tops out at {top.format.label} ({top.tokens_per_s:g} tok/s) on this device: {speeds} tok/s "
+            "are no faster (the CPU, not memory, is the limit), so going lower only costs quality."]
 
 
 def _mark_pareto(variants: list[Variant]) -> None:
