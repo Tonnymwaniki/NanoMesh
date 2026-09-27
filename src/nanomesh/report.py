@@ -7,13 +7,13 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from nanomesh.hardware import DeviceProfile, compute_class
-from nanomesh.model import ModelInfo, analyze
-from nanomesh.planner import Plan, Requirements, Variant, memory_budgets, max_practical_params, plan
-from nanomesh.results import Result, evidence
+from nanomesh.hardware import DeviceProfile
+from nanomesh.model import ModelInfo
+from nanomesh.passport import passport
+from nanomesh.planner import Plan, Variant
+from nanomesh.results import Result
 
 QUALITY_STYLE = {"lossless": "green", "high": "green", "good": "cyan", "fair": "yellow", "severe": "red"}
-REFERENCE_SIZES = ["1b", "3b", "7b", "13b", "32b", "70b"]
 
 
 def _fmt_gb(gb: float | None) -> str:
@@ -58,36 +58,29 @@ def device_passport(device: DeviceProfile) -> Panel:
         if v:
             spec.add_row(k, str(v))
 
-    budget = max(b.memory_gb for b in memory_budgets(device))
-    comfy = max_practical_params(budget * 0.75, 4096)
-    limit = max_practical_params(budget, 4096)
+    pp = passport(device)
     fit = Text()
-    fit.append(f"\nAI COMPUTE CLASS  {compute_class(device)}\n", style="bold magenta")
-    fit.append(f"Model memory budget ~{budget:.1f} GB\n\n")
-    fit.append(f"🟢 Recommended  up to ~{comfy}B params (INT4)\n", style="green")
-    fit.append(f"🟡 Possible     ~{comfy}B – {limit}B params (INT4, tight)\n", style="yellow")
-    fit.append(f"🔴 Not advised  above ~{limit}B params\n", style="red")
+    fit.append(f"\nAI COMPUTE CLASS  {pp.compute_class}\n", style="bold magenta")
+    fit.append(f"Model memory budget ~{pp.budget_gb:.1f} GB\n\n")
+    fit.append(f"🟢 Recommended  up to ~{pp.recommended_max_b}B params (INT4)\n", style="green")
+    fit.append(f"🟡 Possible     ~{pp.recommended_max_b}B – {pp.possible_max_b}B params (INT4, tight)\n", style="yellow")
+    fit.append(f"🔴 Not advised  above ~{pp.possible_max_b}B params\n", style="red")
 
     sizes = Table(title="What fits (4K context)", title_justify="left", box=None, header_style="bold")
     for col in ("Model size", "Best variant", "Memory", "Speed", "Runs on"):
         sizes.add_column(col)
-    for size in REFERENCE_SIZES:
-        model = analyze(size)
-        # Device-level calibration applies; per-model measurements don't (these are generic sizes).
-        ev = evidence(device, model).model_copy(update={"speeds": {}, "quality": {}})
-        p = plan(model, device, Requirements(min_quality="fair"), ev)
-        v = next((x for x in p.variants if x.format.name == p.recommended), None)
-        if v:
-            sizes.add_row(size.upper(), Text(v.format.label, style=QUALITY_STYLE[v.quality]),
-                          f"{v.total_memory_gb:.1f} GB", _fmt_speed(v.tokens_per_s, v.speed_source), v.placement or "")
+    for f in pp.fits:
+        if f.fits:
+            sizes.add_row(f.size, Text(f.label, style=QUALITY_STYLE[f.quality]), f"{f.memory_gb:.1f} GB",
+                          _fmt_speed(f.tokens_per_s, f.speed_source), f.placement or "")
         else:
-            sizes.add_row(size.upper(), Text("won't fit", style="red"), "", "", "")
+            sizes.add_row(f.size, Text("won't fit", style="red"), "", "", "")
 
     notes = Text(f"\n{device.notes}", style="dim") if device.notes else Text("")
-    if device.is_local and device.available_ram_gb is not None and device.available_ram_gb < budget * 0.5:
+    if pp.low_free_ram:
         notes.append(f"\n⚠ Only {device.available_ram_gb:g} GB of RAM is free right now. The table assumes "
                      "you close other apps (especially browsers) before running a model.", style="yellow")
-    if device.is_local and not device.matched_id:
+    if pp.unrecognised:
         notes.append("\nThis exact model isn't in the NanoMesh database yet, so speeds are unknown until you run "
                      "`nanomesh benchmark`.", style="dim")
     return Panel(Group(spec, fit, sizes, notes), title=f"[bold]DEVICE PASSPORT · {device.name}",

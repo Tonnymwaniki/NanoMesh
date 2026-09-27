@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NanoMesh Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%233b82f6'/%3E%3Cstop offset='1' stop-color='%2322d3a6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M10 54V10h12l20 28V10h12v44H42L22 26v28z' fill='url(%23g)'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #070d1a;
+    --panel: #0d1628;
+    --card: #111c33;
+    --card-2: #15223d;
+    --line: #1f2d4a;
+    --text: #e8eefc;
+    --muted: #8a9bbd;
+    --faint: #5c6d8f;
+    --blue: #3b82f6;
+    --blue-strong: #2563eb;
+    --green: #22c55e;
+    --teal: #22d3a6;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --purple: #8b5cf6;
+    --radius: 14px;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 Inter, "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; }
+  button, input, select { font: inherit; color: inherit; }
+  a { color: var(--blue); }
+  /* The gradient paints the sidebar column to the bottom of long pages. */
+  .app { display: grid; grid-template-columns: 248px 1fr; min-height: 100vh;
+    background: linear-gradient(to right, var(--panel) 248px, var(--bg) 248px); }
+
+  /* Sidebar */
+  .side { background: var(--panel); border-right: 1px solid var(--line); padding: 22px 16px;
+    display: flex; flex-direction: column; gap: 6px; position: sticky; top: 0; height: 100vh; }
+  .brand { display: flex; align-items: center; gap: 10px; font-size: 22px; font-weight: 700;
+    letter-spacing: -0.02em; padding: 0 8px 18px; }
+  .brand svg { width: 34px; height: 34px; }
+  .nav { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px;
+    color: var(--muted); text-decoration: none; border: 0; background: none; cursor: pointer; text-align: left; width: 100%; }
+  .nav:hover { background: var(--card); color: var(--text); }
+  .nav.active { background: var(--blue-strong); color: #fff; }
+  .nav svg { width: 18px; height: 18px; flex: none; }
+  .nav .soon { margin-left: auto; font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+    background: #2a1f4d; color: #c4b5fd; padding: 2px 7px; border-radius: 99px; }
+  .nav-label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint);
+    padding: 16px 12px 4px; }
+  .side-foot { margin-top: auto; background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px; font-size: 12px; color: var(--muted); }
+  .side-foot b { color: var(--text); display: block; font-size: 13px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+    margin-right: 6px; box-shadow: 0 0 0 3px #22c55e22; }
+
+  /* Main */
+  main { padding: 28px 32px 48px; min-width: 0; }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+  h1 { font-size: 26px; margin: 0; letter-spacing: -0.02em; }
+  h2 { font-size: 16px; margin: 0; }
+  .sub { color: var(--muted); margin: 4px 0 0; }
+  .chip { display: flex; align-items: center; gap: 10px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 8px 14px; }
+  .chip .avatar { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
+    background: linear-gradient(135deg, var(--blue), var(--teal)); font-weight: 700; color: #04101f; }
+  .chip small { display: block; color: var(--muted); font-size: 12px; }
+
+  .grid { display: grid; gap: 16px; }
+  .stats { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 16px; }
+  .two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; min-width: 0; }
+  .card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 8px; }
+  .card-head a, .linkish { font-size: 12px; color: var(--blue); cursor: pointer; background: none; border: 0; padding: 0; }
+  .stat .icon { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; margin-bottom: 14px; }
+  .stat .num { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
+  .stat .lbl { color: var(--muted); font-size: 13px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 10px; border-bottom: 1px solid #172340; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  .table-wrap { overflow-x: auto; }
+  tr.dim td { color: var(--faint); }
+  tr.best td { background: #10244a; }
+  .num-cell { font-variant-numeric: tabular-nums; }
+
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 9px; border-radius: 99px; background: #1b2947; }
+  .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .q-lossless, .q-high { color: var(--green); }
+  .q-good { color: var(--teal); }
+  .q-fair { color: var(--amber); }
+  .q-severe { color: var(--red); }
+  .src { font-size: 11px; color: var(--muted); margin-left: 4px; }
+  .src.measured { color: var(--green); }
+  .src.calibrated { color: #c4b5fd; }
+
+  .steps { display: grid; gap: 14px; }
+  .step { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 12px; }
+  .step .n { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 13px; }
+  .step b { display: block; }
+  .step span { color: var(--muted); font-size: 13px; }
+
+  code, pre { font-family: var(--mono); }
+  .cmd { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: #081022;
+    border: 1px solid var(--line); border-radius: 8px; padding: 6px 6px 6px 10px; margin-top: 6px; font-size: 12px; }
+  .cmd code { overflow-x: auto; white-space: nowrap; min-width: 0; }
+  .copy { background: #1b2947; border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px; font-size: 11px; cursor: pointer; color: var(--muted); flex: none; }
+  .copy:hover { color: var(--text); }
+  pre.code { background: #081022; border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin: 0;
+    font-size: 12.5px; line-height: 1.6; overflow-x: auto; color: #cfe0ff; }
+  .kw { color: #c792ea; } .str { color: #c3e88d; } .com { color: #5c6d8f; } .fn { color: #82aaff; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+  .tab { background: none; border: 0; padding: 4px 10px; border-radius: 6px; cursor: pointer; color: var(--muted); font-size: 12px; }
+  .tab.on { background: #1b2947; color: var(--text); }
+
+  .ranges { display: grid; gap: 8px; margin: 12px 0 16px; }
+  .range { display: flex; gap: 10px; align-items: center; font-size: 13px; }
+  .range i { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; font-size: 13px; }
+  .kv dt { color: var(--muted); } .kv dd { margin: 0; }
+  .klass { font-size: 20px; font-weight: 700; background: linear-gradient(90deg, #93c5fd, var(--teal));
+    -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+  .empty { text-align: center; padding: 26px 12px; color: var(--muted); }
+  .empty b { display: block; color: var(--text); margin-bottom: 4px; }
+  .note { font-size: 12.5px; color: var(--muted); margin-top: 12px; }
+  .warn { color: var(--amber); }
+
+  form.planner { display: grid; grid-template-columns: 2fr 1.4fr repeat(3, 1fr) auto; gap: 12px; align-items: end; }
+  label { display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
+  input, select { background: #081022; border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; min-width: 0; }
+  input:focus, select:focus, button:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+  .btn { background: var(--blue-strong); color: #fff; border: 0; border-radius: 9px; padding: 10px 18px; font-weight: 600; cursor: pointer; }
+  .btn:hover { background: var(--blue); }
+  .rec { display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: center; background: linear-gradient(135deg, #0f2a4d, #0f3a36);
+    border: 1px solid #1d4f5a; border-radius: var(--radius); padding: 16px 18px; }
+  .rec .trophy { font-size: 30px; }
+  .rec b { font-size: 17px; }
+  .advice { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+  .advice li { margin: 4px 0; }
+  .err { color: var(--red); margin-top: 10px; }
+
+  .devices { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+  .dev { cursor: pointer; text-align: left; }
+  .dev:hover { border-color: var(--blue); }
+  .dev b { display: block; }
+  .dev span { color: var(--muted); font-size: 12.5px; }
+
+  .soon-hero { background: linear-gradient(135deg, #1a1440, #0d1628 60%); border: 1px solid #2e2463; border-radius: var(--radius); padding: 28px; }
+  .soon-hero h2 { font-size: 22px; margin-bottom: 8px; }
+  .soon-hero p { color: var(--muted); max-width: 640px; }
+
+  .legend { font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .loading { color: var(--muted); padding: 30px; }
+
+  @media (max-width: 1100px) {
+    .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .two { grid-template-columns: minmax(0, 1fr); }
+    form.planner { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 760px) {
+    .app { grid-template-columns: 1fr; background: var(--bg); }
+    .side { position: static; height: auto; flex-direction: row; flex-wrap: wrap; padding: 12px; gap: 4px; }
+    .brand { padding: 0 8px 0 4px; font-size: 18px; width: 100%; }
+    .nav { width: auto; padding: 8px 10px; }
+    .nav-label, .side-foot { display: none; }
+    main { padding: 20px 16px 40px; }
+    .stats { grid-template-columns: 1fr 1fr; }
+    form.planner { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side" aria-label="Navigation">
+    <div class="brand">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3b82f6"/><stop offset="1" stop-color="#22d3a6"/></linearGradient></defs><path d="M10 54V10h12l20 28V10h12v44H42L22 26v28z" fill="url(#lg)"/></svg>
+      NanoMesh
+    </div>
+    <button class="nav" data-view="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/></svg>Dashboard</button>
+    <button class="nav" data-view="optimize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg>Model Optimization</button>
+    <button class="nav" data-view="devices"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="14" height="10" rx="1"/><path d="M1 18h18M19 8h3v12h-3z"/></svg>Devices</button>
+    <button class="nav" data-view="benchmarks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M7 15l4-4 3 3 5-6"/></svg>Benchmarks</button>
+    <button class="nav" data-view="docs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6M9 13h7M9 17h7"/></svg>Documentation</button>
+    <div class="nav-label">Coming soon</div>
+    <button class="nav" data-view="syncmesh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 1-15 6.7L3 16M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M3 21v-5h5"/></svg>SyncMesh<span class="soon">Soon</span></button>
+    <button class="nav" data-view="cloud"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 18a5 5 0 1 1 1-9.9A6 6 0 0 1 19 10a4 4 0 0 1 0 8z"/></svg>Cloud &amp; API<span class="soon">Soon</span></button>
+    <div class="side-foot">
+      <b><span class="dot"></span>Running locally</b>
+      <span id="foot-version">NanoMesh</span><br>
+      Your data never leaves this machine.
+    </div>
+  </aside>
+  <main id="view" aria-live="polite"><div class="loading">Scanning this device…</div></main>
+</div>
+
+<script>
+"use strict";
+// ---- tiny DOM helper: all dynamic text goes through textContent, never innerHTML ----
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat(Infinity)) {
+    if (kid == null || kid === false) continue;
+    el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
+  return el;
+}
+const $view = document.getElementById("view");
+const state = { summary: null, devices: null, lastPlan: null };
+
+async function getJSON(url) {
+  const res = await fetch(url);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || res.statusText);
+  return body;
+}
+
+// ---- formatting ----
+const fmt = {
+  gb: v => v == null ? "—" : v < 1 ? `${Math.round(v * 1024)} MB` : `${v.toFixed(v < 10 ? 2 : 1)} GB`,
+  params: p => p >= 1e8 ? `${(p / 1e9).toFixed(1)}B` : `${(p / 1e6).toFixed(0)}M`,
+  when: iso => { const d = new Date(iso); return isNaN(d) ? iso : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }); },
+};
+function speed(v, source) {
+  if (v == null) return h("span", { class: "faint" }, "—");
+  const n = v >= 100 ? Math.round(v).toLocaleString() : v.toFixed(1);
+  const mark = { measured: ["✓ measured", "measured"], calibrated: ["* calibrated", "calibrated"] }[source] || ["~ estimate", ""];
+  return h("span", {}, `${n} tok/s`, h("span", { class: `src ${mark[1]}` }, mark[0]));
+}
+function quality(tier, pct, source) {
+  const mark = source === "measured" ? " ✓" : source === "calibrated" ? " *" : "";
+  const label = pct == null ? tier : `${tier} · ${source === "typical" ? "~" : ""}${+pct.toFixed(2)}%${mark}`;
+  return h("span", { class: `pill q-${tier}` }, label);
+}
+function copyCmd(text) {
+  const btn = h("button", { class: "copy", type: "button", onclick: async () => {
+    try { await navigator.clipboard.writeText(text); btn.textContent = "Copied"; }
+    catch { btn.textContent = "Select & copy"; }
+    setTimeout(() => (btn.textContent = "Copy"), 1500);
+  } }, "Copy");
+  return h("div", { class: "cmd" }, h("code", {}, text), btn);
+}
+function icon(color, path) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("width", "20"); svg.setAttribute("height", "20");
+  svg.setAttribute("fill", "none"); svg.setAttribute("stroke", color); svg.setAttribute("stroke-width", "2");
+  const p = document.createElementNS("http://www.w3.org/2000/svg", "path"); p.setAttribute("d", path); svg.append(p);
+  return h("div", { class: "icon", style: `background:${color}22` }, svg);
+}
+function greeting() {
+  const hr = new Date().getHours();
+  return hr < 12 ? "Good morning" : hr < 18 ? "Good afternoon" : "Good evening";
+}
+
+// ---- shared pieces ----
+function passportCard(pp, title) {
+  const d = pp.device;
+  const facts = [
+    ["Recognised as", d.is_local ? d.matched_id : null], ["CPU", d.cpu],
+    ["RAM", d.ram_gb != null ? `${d.ram_gb} GB` + (d.available_ram_gb != null ? ` (${d.available_ram_gb} GB free)` : "") : null],
+    ["Memory bandwidth", d.memory_bandwidth_gbps ? `${d.memory_bandwidth_gbps} GB/s` : null],
+    ["GPU", (d.gpus || []).map(g => g.name).join("; ") || null], ["NPU", d.npu],
+  ].filter(([, v]) => v);
+  return h("section", { class: "card" },
+    h("div", { class: "card-head" }, h("h2", {}, title || `Device Passport · ${d.name}`)),
+    h("div", { class: "klass" }, pp.compute_class),
+    h("div", { class: "sub" }, `Model memory budget ~${pp.budget_gb} GB`),
+    h("div", { class: "ranges" },
+      h("div", { class: "range" }, h("i", { style: "background:var(--green)" }), `Recommended: up to ~${pp.recommended_max_b}B params (INT4)`),
+      h("div", { class: "range" }, h("i", { style: "background:var(--amber)" }), `Possible: ~${pp.recommended_max_b}B – ${pp.possible_max_b}B params (INT4, tight)`),
+      h("div", { class: "range" }, h("i", { style: "background:var(--red)" }), `Not advised: above ~${pp.possible_max_b}B params`)),
+    h("dl", { class: "kv" }, facts.map(([k, v]) => [h("dt", {}, k), h("dd", {}, v)])),
+    h("div", { class: "table-wrap", style: "margin-top:14px" }, h("table", {},
+      h("thead", {}, h("tr", {}, ["Model size", "Best variant", "Memory", "Speed", "Runs on"].map(c => h("th", {}, c)))),
+      h("tbody", {}, pp.fits.map(f => f.fits
+        ? h("tr", {}, h("td", {}, f.size), h("td", {}, h("span", { class: `pill q-${f.quality}` }, f.label)),
+            h("td", { class: "num-cell" }, fmt.gb(f.memory_gb)), h("td", {}, speed(f.tokens_per_s, f.speed_source)), h("td", {}, f.placement || ""))
+        : h("tr", { class: "dim" }, h("td", {}, f.size), h("td", { colspan: 4 }, "won't fit")))))),
+    pp.low_free_ram && h("p", { class: "note warn" }, `Only ${d.available_ram_gb} GB of RAM is free right now. Close other apps (especially browsers) before running a model.`),
+    pp.unrecognised && h("p", { class: "note" }, "This exact machine isn't in the NanoMesh database yet, so speeds stay unknown until you run nanomesh benchmark."),
+    d.notes && h("p", { class: "note" }, d.notes));
+}
+
+function resultsTable(rows, { limit, compact } = {}) {
+  if (!rows.length) {
+    return h("div", { class: "empty" }, h("b", {}, "No benchmarks yet"),
+      "Measure real speed, memory and quality on this machine:", copyCmd("nanomesh benchmark path/to/models/"));
+  }
+  const shown = [...rows].reverse().slice(0, limit || rows.length);
+  if (compact) {
+    return h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, ["Model", "Variant", "Generate", "Quality"].map(c => h("th", {}, c)))),
+      h("tbody", {}, shown.map(r => h("tr", {},
+        h("td", {}, `${r.model_name} (${fmt.params(r.model_params)})`), h("td", {}, r.format || "?"),
+        h("td", {}, speed(r.gen_tokens_per_s, "measured")),
+        h("td", {}, r.quality_pct == null ? "—" : `${+r.quality_pct.toFixed(1)}%`))))));
+  }
+  return h("div", { class: "table-wrap" }, h("table", {},
+    h("thead", {}, h("tr", {}, ["Model", "Variant", "Size", "Generate", "Peak RAM", "Quality", "Device", "When"].map(c => h("th", {}, c)))),
+    h("tbody", {}, shown.map(r => h("tr", {},
+      h("td", {}, `${r.model_name} (${fmt.params(r.model_params)})`), h("td", {}, r.format || "?"),
+      h("td", { class: "num-cell" }, fmt.gb(r.file_size_gb)), h("td", {}, speed(r.gen_tokens_per_s, "measured")),
+      h("td", { class: "num-cell" }, fmt.gb(r.peak_rss_gb)),
+      h("td", {}, r.quality_pct == null ? "—" : h("span", {}, `${+r.quality_pct.toFixed(2)}% of ${r.reference_format}`)),
+      h("td", {}, r.device_name), h("td", { style: "color:var(--muted)" }, fmt.when(r.timestamp)))))));
+}
+
+// ---- views ----
+const views = {
+  dashboard() {
+    const s = state.summary, st = s.stats, d = s.passport.device;
+    const fastest = st.fastest_tokens_per_s;
+    return [
+      h("div", { class: "top" },
+        h("div", {}, h("h1", {}, `${greeting()}, Developer 👋`),
+          h("p", { class: "sub" }, "Find, build and measure the best version of your AI model for real hardware.")),
+        h("div", { class: "chip" }, h("div", { class: "avatar" }, (d.name || "?").slice(0, 1)),
+          h("div", {}, h("b", {}, d.name), h("small", {}, d.matched_id ? "Recognised device" : "This device")))),
+      h("div", { class: "grid stats" },
+        h("div", { class: "card stat" }, icon("#3b82f6", "M12 2l9 5v10l-9 5-9-5V7z"), h("div", { class: "num" }, st.models_measured), h("div", { class: "lbl" }, "Models measured here")),
+        h("div", { class: "card stat" }, icon("#22d3a6", "M3 3v18h18M7 15l4-4 3 3 5-6"), h("div", { class: "num" }, st.variants_measured), h("div", { class: "lbl" }, "Variants benchmarked")),
+        h("div", { class: "card stat" }, icon("#f59e0b", "M13 2L3 14h8l-1 8 10-12h-8z"), h("div", { class: "num" }, fastest ? `${fastest.toFixed(1)}` : "—"), h("div", { class: "lbl" }, "Fastest measured (tok/s)")),
+        h("div", { class: "card stat" }, icon("#8b5cf6", "M4 5h16v11H4zM2 20h20"), h("div", { class: "num" }, st.known_devices), h("div", { class: "lbl" }, "Devices in the database"))),
+      h("div", { class: "grid two" },
+        h("div", { class: "grid" },
+          h("section", { class: "card" },
+            h("div", { class: "card-head" }, h("h2", {}, "Quick start")),
+            h("div", { class: "steps" },
+              h("div", { class: "step" }, h("div", { class: "n", style: "background:#1d3a7a" }, "1"),
+                h("div", {}, h("b", {}, "Plan a model for a device"), h("span", {}, "Pick the best variant before downloading anything."), copyCmd("nanomesh plan qwen2.5-7b"))),
+              h("div", { class: "step" }, h("div", { class: "n", style: "background:#0f5a4a" }, "2"),
+                h("div", {}, h("b", {}, "Build it"), h("span", {}, "Convert and quantize a Hugging Face model with llama.cpp."), copyCmd("nanomesh optimize ./my-model --device local"))),
+              h("div", { class: "step" }, h("div", { class: "n", style: "background:#3b2a7a" }, "3"),
+                h("div", {}, h("b", {}, "Measure it"), h("span", {}, "Real speed, memory and quality. Every plan learns from it."), copyCmd("nanomesh benchmark ./models/")))),
+            h("button", { class: "btn", style: "margin-top:16px", onclick: () => go("optimize") }, "Plan a model")),
+          h("section", { class: "card" },
+            h("div", { class: "card-head" }, h("h2", {}, "Measured on this machine"), h("button", { class: "linkish", onclick: () => go("benchmarks") }, "View all")),
+            resultsTable(s.results.filter(r => r.device_key === s.device_key), { limit: 6, compact: true })),
+          codeCard()),
+        passportCard(s.passport, "This device")),
+    ];
+  },
+
+  optimize() {
+    const s = state.summary;
+    const devices = state.devices || [];
+    const models = [...new Set([...s.known_models, ...s.results.map(r => r.model_name)])];
+    const out = h("div", {});
+    const form = h("form", { class: "planner card", onsubmit: async e => {
+      e.preventDefault();
+      const q = new URLSearchParams(new FormData(form));
+      for (const [k, v] of [...q]) if (!v) q.delete(k);
+      out.replaceChildren(h("div", { class: "loading" }, "Planning…"));
+      try { state.lastPlan = await getJSON(`/api/plan?${q}`); out.replaceChildren(planView(state.lastPlan)); }
+      catch (err) { out.replaceChildren(h("p", { class: "err" }, err.message)); }
+    } },
+      h("label", {}, "Model", h("input", { name: "model", list: "models", value: "qwen2.5-7b", required: true, placeholder: "qwen2.5-7b, 7b, or a local path" }),
+        h("datalist", { id: "models" }, models.map(m => h("option", { value: m })))),
+      h("label", {}, "Device", h("select", { name: "device" }, h("option", { value: "local" }, `This device (${s.passport.device.name})`),
+        devices.map(d => h("option", { value: d.id }, d.name)))),
+      h("label", {}, "Context", h("input", { name: "context", type: "number", min: "256", step: "256", value: "4096" })),
+      h("label", {}, "Min quality", h("select", { name: "min_quality" }, ["good", "high", "lossless", "fair", "95", "98"].map(v => h("option", { value: v }, /^\d/.test(v) ? `${v}%` : v)))),
+      h("label", {}, "Prefer", h("select", { name: "prefer" }, ["balanced", "quality", "speed", "size"].map(v => h("option", { value: v }, v)))),
+      h("button", { class: "btn", type: "submit" }, "Plan"));
+    setTimeout(() => form.requestSubmit(), 0);
+    return [
+      h("div", { class: "top" }, h("div", {}, h("h1", {}, "Model Optimization"),
+        h("p", { class: "sub" }, "Every quantized variant of a model, on a specific device, against your requirements."))),
+      form, h("div", { style: "margin-top:16px" }, out)];
+  },
+
+  devices() {
+    const list = state.devices || [];
+    const detail = h("div", {});
+    const show = async id => {
+      detail.replaceChildren(h("div", { class: "loading" }, "Loading passport…"));
+      try { detail.replaceChildren(passportCard(await getJSON(`/api/passport?device=${encodeURIComponent(id)}`))); detail.scrollIntoView({ behavior: "smooth" }); }
+      catch (err) { detail.replaceChildren(h("p", { class: "err" }, err.message)); }
+    };
+    return [
+      h("div", { class: "top" }, h("div", {}, h("h1", {}, "Devices"),
+        h("p", { class: "sub" }, `${list.length} curated profiles, plus this machine. Pick one to see what it can run.`))),
+      h("div", { class: "grid devices" },
+        h("button", { class: "card dev", onclick: () => show("local") }, h("b", {}, "This device"), h("span", {}, state.summary.passport.device.name)),
+        list.map(d => h("button", { class: "card dev", onclick: () => show(d.id) },
+          h("b", {}, d.name), h("span", {}, `${d.kind} · ${d.ram_gb} GB${d.memory_bandwidth_gbps ? ` · ${d.memory_bandwidth_gbps} GB/s` : ""}`)))),
+      h("div", { style: "margin-top:16px" }, detail)];
+  },
+
+  benchmarks() {
+    const s = state.summary;
+    return [
+      h("div", { class: "top" }, h("div", {}, h("h1", {}, "Benchmarks"),
+        h("p", { class: "sub" }, "Everything measured with nanomesh benchmark. Plans use these instead of estimates."))),
+      h("section", { class: "card" }, resultsTable(s.results)),
+      h("p", { class: "note" }, "Stored in ", h("code", {}, s.results_path), ". One JSON object per line.")];
+  },
+
+  docs() {
+    const cmds = [
+      ["nanomesh scan-device", "Device Passport for this machine"],
+      ["nanomesh devices [query]", "Search the device database"],
+      ["nanomesh plan <model> -d <device>", "Recommend the best variant (--min-quality 95, --min-speed 5, --prefer speed)"],
+      ["nanomesh optimize <hf-dir> -d <device>", "Convert, quantize, benchmark and package with llama.cpp"],
+      ["nanomesh benchmark <dir|file.gguf>", "Measure speed, peak RAM and quality"],
+      ["nanomesh results", "Everything measured on this machine"],
+      ["nanomesh dashboard", "This dashboard"],
+    ];
+    return [
+      h("div", { class: "top" }, h("div", {}, h("h1", {}, "Documentation"), h("p", { class: "sub" }, "The CLI behind this dashboard."))),
+      h("section", { class: "card" }, h("div", { class: "table-wrap" }, h("table", {},
+        h("tbody", {}, cmds.map(([c, d]) => h("tr", {}, h("td", {}, h("code", {}, c)), h("td", { style: "color:var(--muted);white-space:normal" }, d))))))),
+      h("div", { class: "grid two", style: "margin-top:16px" },
+        h("section", { class: "card" }, h("h2", {}, "How to read the numbers"),
+          h("ul", { class: "advice" },
+            h("li", {}, "✓ measured: benchmarked on this device."),
+            h("li", {}, "* calibrated: predicted from this device's own benchmarks (memory bandwidth, CPU ceiling, measured quality loss)."),
+            h("li", {}, "~ estimate: from the device's spec sheet; run a benchmark to replace it."),
+            h("li", {}, "Quality = reference perplexity ÷ variant perplexity, as a percentage."))),
+        codeCard())];
+  },
+
+  syncmesh() {
+    return comingSoon("SyncMesh", "Run on device, sync when online.",
+      "SyncMesh is the planned second half of NanoMesh: ship an optimized model to phones and laptops, run it fully offline, and sync inputs, results and model updates when a connection appears.",
+      ["On-device runtime for Android and desktop", "Offline queue with sync when back online", "Push model updates to a fleet of devices", "Anonymous benchmark sharing to grow the device database"]);
+  },
+  cloud() {
+    return comingSoon("Cloud & API", "Optimize without a powerful machine.",
+      "Upload a model, pick target devices, and let NanoMesh Cloud build and benchmark every variant, then download the deployment package.",
+      ["Hosted optimization and benchmarking", "API keys and a Python / Kotlin SDK", "Shared benchmark database across users"]);
+  },
+};
+
+function comingSoon(title, tagline, text, items) {
+  return [
+    h("div", { class: "soon-hero" }, h("span", { class: "pill", style: "color:#c4b5fd" }, "Coming soon"),
+      h("h2", {}, `${title}: ${tagline}`), h("p", {}, text),
+      h("ul", { class: "advice" }, items.map(i => h("li", {}, i))),
+      h("p", { class: "note" }, "Not built yet. Today NanoMesh plans, builds and measures models locally; see Model Optimization."))];
+}
+
+function planView(p) {
+  const rec = p.variants.find(v => v.format.name === p.recommended);
+  const ruled = p.variants.filter(v => v.reasons.length);
+  return h("div", { class: "grid" },
+    rec ? h("div", { class: "rec" }, h("div", { class: "trophy" }, "🏆"),
+      h("div", {}, h("b", {}, `Recommended: ${rec.format.label} (${rec.format.name}) on ${rec.placement}`),
+        h("div", { class: "sub" }, `${fmt.gb(rec.total_memory_gb)} · ${Math.round(rec.compression * 100)}% smaller than FP16 · `,
+          speed(rec.tokens_per_s, rec.speed_source), " · ", quality(rec.quality, rec.quality_pct, rec.quality_source)),
+        h("div", { class: "sub" }, rec.format.note)))
+      : h("div", { class: "rec", style: "background:#3a1414;border-color:#6b2020" }, h("div", { class: "trophy" }, "✕"),
+        h("div", {}, h("b", {}, "No variant meets these requirements"), h("div", { class: "sub" }, "See the advice below."))),
+    h("section", { class: "card" },
+      h("div", { class: "card-head" }, h("h2", {}, `${p.model.name} (${fmt.params(p.model.params)}) on ${p.device.name}`),
+        h("span", { class: "sub" }, `Budget ${p.budgets.map(b => `${b.placement} ${b.memory_gb.toFixed(1)} GB`).join(", ")} · ${p.requirements.context} tokens`)),
+      h("div", { class: "table-wrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, ["", "Variant", "Memory", "Speed", "Quality", "Runs on"].map(c => h("th", {}, c)))),
+        h("tbody", {}, p.variants.map(v => h("tr", { class: v.format.name === p.recommended ? "best" : v.meets_requirements ? "" : "dim" },
+          h("td", {}, v.format.name === p.recommended ? "🏆" : v.pareto ? "•" : ""),
+          h("td", {}, h("b", {}, v.format.label), " ", h("span", { class: "src" }, v.format.name)),
+          h("td", { class: "num-cell" }, fmt.gb(v.total_memory_gb)),
+          h("td", {}, speed(v.tokens_per_s, v.speed_source)),
+          h("td", {}, quality(v.quality, v.quality_pct, v.quality_source)),
+          h("td", {}, v.placement || "✕")))))),
+      h("div", { class: "legend" }, "✓ measured on this device · * calibrated from its benchmarks · ~ estimate · • Pareto-optimal")),
+    (ruled.length || p.advice.length) && h("section", { class: "card" }, h("h2", {}, "Why"),
+      h("ul", { class: "advice" }, ruled.map(v => h("li", {}, `${v.format.label}: ${v.reasons.join("; ")}`)),
+        p.advice.map(a => h("li", { style: "color:var(--text)" }, a)))),
+    rec && h("section", { class: "card" }, h("h2", {}, "Build it"),
+      h("p", { class: "sub" }, "Point it at a Hugging Face model directory (needs llama.cpp):"),
+      copyCmd(`nanomesh optimize ./${p.model.name} --device ${p.device.matched_id || p.device.id} -q ${rec.format.name}`)));
+}
+
+function codeCard() {
+  const py = [
+    ["com", "# Plan with the Python API: the same engine as the CLI\n"],
+    ["kw", "from"], ["", " nanomesh.model "], ["kw", "import"], ["", " analyze\n"],
+    ["kw", "from"], ["", " nanomesh.devices "], ["kw", "import"], ["", " get_device\n"],
+    ["kw", "from"], ["", " nanomesh.planner "], ["kw", "import"], ["", " plan, Requirements\n\n"],
+    ["", "p = "], ["fn", "plan"], ["", "(\n    "], ["fn", "analyze"], ["", "("], ["str", "\"qwen2.5-7b\""], ["", "),\n    "],
+    ["fn", "get_device"], ["", "("], ["str", "\"redmi-14c-4gb\""], ["", "),\n    "],
+    ["fn", "Requirements"], ["", "(min_quality_pct="], ["str", "95"], ["", ", context="], ["str", "2048"], ["", "),\n)\n"],
+    ["fn", "print"], ["", "(p.recommended, p.advice)"],
+  ];
+  const cli = [["com", "# Or from any terminal\n"], ["", "nanomesh plan qwen2.5-7b -d redmi-14c-4gb \\\n    --min-quality 95 --context 2048\n"],
+    ["", "nanomesh plan qwen2.5-7b --json "], ["com", "# machine-readable"]];
+  const pre = h("pre", { class: "code" });
+  const render = parts => pre.replaceChildren(...parts.map(([c, t]) => c ? h("span", { class: c }, t) : document.createTextNode(t)));
+  const tabs = [["Python", py], ["CLI", cli]].map(([name, parts], i) => {
+    const b = h("button", { class: `tab${i ? "" : " on"}`, type: "button", onclick: () => {
+      tabs.forEach(t => t.classList.remove("on")); b.classList.add("on"); render(parts); } }, name);
+    return b;
+  });
+  render(py);
+  return h("section", { class: "card" }, h("div", { class: "tabs" }, tabs), pre);
+}
+
+// ---- routing ----
+function go(name) { location.hash = name; }
+function render() {
+  const name = (location.hash || "#dashboard").slice(1);
+  const view = views[name] || views.dashboard;
+  document.querySelectorAll(".nav[data-view]").forEach(b => b.classList.toggle("active", b.dataset.view === name || (!views[name] && b.dataset.view === "dashboard")));
+  $view.replaceChildren(...[view()].flat());
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll(".nav[data-view]").forEach(b => b.addEventListener("click", () => go(b.dataset.view)));
+window.addEventListener("hashchange", render);
+
+(async () => {
+  try {
+    [state.summary, { devices: state.devices }] = await Promise.all([getJSON("/api/summary"), getJSON("/api/devices")]);
+    document.getElementById("foot-version").textContent = `NanoMesh ${state.summary.version}`;
+    render();
+  } catch (err) {
+    $view.replaceChildren(h("p", { class: "err" }, `Could not load NanoMesh data: ${err.message}`));
+  }
+})();
+</script>
+</body>
+</html>

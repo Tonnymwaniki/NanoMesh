@@ -313,6 +313,33 @@ def benchmark(
 
 
 @app.command()
+def dashboard(
+    port: int = typer.Option(8765, help="Port to serve on (localhost only)."),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open it in your browser."),
+):
+    """Open the NanoMesh dashboard in your browser (runs locally, works offline)."""
+    import webbrowser
+
+    from nanomesh.web import make_server
+
+    try:
+        server = make_server(port)
+    except OSError as e:
+        console.print(f"[red]Can't use port {port} ({e.strerror}). Try --port {port + 1}.")
+        raise typer.Exit(1)
+    url = f"http://127.0.0.1:{server.server_address[1]}/"
+    console.print(f"NanoMesh dashboard running at [bold cyan]{url}[/]  (Ctrl+C to stop)")
+    if open_browser:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        console.print("\nStopped.")
+    finally:
+        server.server_close()
+
+
+@app.command()
 def results(
     device_id: str = typer.Option(None, "--device", "-d", help="Only this device (id, or 'local')."),
     as_json: bool = typer.Option(False, "--json"),

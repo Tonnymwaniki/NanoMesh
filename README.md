@@ -32,6 +32,16 @@ Windows, Linux, macOS and Android (via Termux) are supported; see
 
 ## Usage
 
+### Dashboard
+
+```sh
+nanomesh dashboard
+```
+
+Opens a local web dashboard in your browser: your Device Passport, everything you've measured,
+an interactive planner for any model and device, and the device database. It runs on
+`127.0.0.1` only, needs no internet connection, and your data never leaves the machine.
+
 ### Device Passport: what can this machine run?
 
 `scan-device` recognises the exact machine (e.g. "HP EliteBook 840 G3", "ThinkPad T480",
