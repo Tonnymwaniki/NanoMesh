@@ -27,7 +27,7 @@ from nanomesh.hardware import GB, DeviceProfile
 from nanomesh.model import analyze
 from nanomesh.planner import USABLE_TOKENS_PER_S, Requirements, plan
 
-SOURCE_EXT = {".py", ".ipynb", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}
+SOURCE_EXT = {".py", ".ipynb", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".kt", ".kts", ".java", ".swift", ".dart"}
 MODEL_EXT = {".gguf", ".safetensors", ".onnx", ".pt", ".pth", ".tflite", ".mlmodel"}
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "env", "__pycache__", "dist", "build", ".next", ".tox",
              "site-packages", ".mypy_cache", ".pytest_cache", "target", ".idea", ".vscode"}
@@ -46,7 +46,10 @@ PROVIDERS: list[tuple[str, re.Pattern]] = [
                           r"\.chat\.completions\.create|\.responses\.create|\bopenai\.")),
     ("Anthropic", re.compile(r"\banthropic\b|@anthropic-ai/sdk|\bAnthropic\(|\.messages\.create")),
     ("Google Gemini", re.compile(r"google\.generativeai|google\.genai|@google/generative-ai|@google/genai|"
-                                 r"GenerativeModel\(|\bgenai\.")),
+                                 r"GoogleGenerativeAI|[gG]enerativeModel\(|\bgenai\.|@google-cloud/vertexai|"
+                                 r"\bVertexAI\b|firebase/(ai|vertexai)|com\.google\.firebase\.(ai|vertexai)|"
+                                 r"com\.google\.ai\.client\.generativeai|Firebase\.(ai|vertexAI)\b|FirebaseAI|"
+                                 r"firebaseAI\(|package:(firebase_ai|firebase_vertexai|google_generative_ai)/")),
     ("Mistral", re.compile(r"\bmistralai\b|@mistralai/")),
     ("Cohere", re.compile(r"\bcohere\b")),
     ("Groq", re.compile(r"\bfrom groq\b|\bimport groq\b|groq-sdk|\bGroq\(")),
@@ -62,20 +65,37 @@ LOCAL = {"Ollama (local)", "llama.cpp (local)", "Transformers (local)", "sentenc
 # What a call does, from the API it uses or the model it names.
 TASKS: list[tuple[str, re.Pattern]] = [
     ("embeddings", re.compile(r"embeddings?\.create|\.embed_content\(|\.embed\(|\.embed_(query|documents)\(|"
-                              r"Embeddings\(|SentenceTransformer\(|\.encode\(")),
+                              r"Embeddings\(|SentenceTransformer\(|\.encode\(|\.embedContent\(|"
+                              r"\.batchEmbedContents\(")),
     ("speech-to-text", re.compile(r"audio\.transcriptions|\bwhisper\b|speech_to_text|automatic-speech-recognition",
                                   re.I)),
     ("image generation", re.compile(r"images\.generate|dall-e|gpt-image|imagen|text-to-image|StableDiffusion", re.I)),
     ("chat", re.compile(r"chat\.completions|responses\.create|messages\.create|generate_content|ChatOpenAI|"
-                        r"ChatAnthropic|\.chat\(|\.invoke\(|create_chat_completion\(|\bLlama\(")),
+                        r"ChatAnthropic|\.chat\(|\.invoke\(|create_chat_completion\(|\bLlama\(|"
+                        r"\.generateContent(Stream)?\(|\.sendMessage(Stream)?\(|\.startChat\(")),
 ]
-MODEL_NAME_RE = re.compile(r"""["'`]((?:gpt-|o[134]-|o[134]["'`]|chatgpt-|claude-|gemini-|text-embedding-|"""
-                           r"""whisper-|dall-e-|gpt-image|mistral-|command-|llama-?3|mixtral)[A-Za-z0-9.\-:_]*)["'`]""")
+MODEL_BODY = (r"""((?:gpt-|o[134]-|o[134](?=["'`])|chatgpt-|claude-|gemini-|gemma-|text-embedding-|"""
+              r"""whisper-|dall-e-|gpt-image|mistral-|command-|llama-?3|mixtral)[A-Za-z0-9.\-:_]*)""")
+MODEL_NAME_RE = re.compile(r"""["'`]""" + MODEL_BODY + r"""["'`]""")
+# GEMINI_MODEL = "gemini-2.5-flash", later used by name: getGenerativeModel({ model: GEMINI_MODEL })
+CONSTANT_RE = re.compile(r"""\b([A-Z][A-Z0-9_]{2,})\s*[:=][^=\n]*?["'`]""" + MODEL_BODY + r"""["'`]""")
 PRETRAINED_RE = re.compile(r"""(?:from_pretrained|SentenceTransformer|pipeline)\(\s*(?:[^)]*?model\s*=\s*)?"""
                            r"""["']([A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+|all-[A-Za-z0-9\-]+)["']""")
 IMPORT_RE = re.compile(r"^\s*(import\s|from\s+\S+\s+import\s|export\s+\*\s+from\s)|^\s*(const|let|var)\s+"
                        r"[\w{}\s,]+=\s*require\(")
 DEFINITION_RE = re.compile(r"^\s*(export\s+)?(async\s+)?(def|function|class)\s")
+# Where a file's code runs decides what "local" can mean for it.
+MOBILE_RE = re.compile(r"\.(kt|kts|java|swift|dart)$|(^|/)(android|ios)/")
+SERVER_PATH_RE = re.compile(r"(^|/)(functions|server|backend|api|cloud[-_]?functions|lambdas?|workers?)/")
+SERVER_CODE_RE = re.compile(r"firebase-functions|functions\.https|\bonRequest\(|\bonCall\(|\bexpress\(\)|"
+                            r"FastAPI\(|Flask\(|from django|@app\.(get|post|route)|exports\.handler|Deno\.serve|"
+                            r"@google-cloud/functions-framework|functions_framework")
+ANDROID_AI_RE = re.compile(r"com\.google\.firebase:firebase-(ai|vertexai)[\w-]*|firebase-(ai|vertexai)\b|"
+                           r"com\.google\.ai\.client\.generativeai:[\w-]+|com\.google\.mediapipe:tasks-genai|"
+                           r"com\.google\.mlkit:genai[\w-]*|org\.tensorflow:tensorflow-lite[\w-]*|"
+                           r"com\.microsoft\.onnxruntime:[\w-]+")
+FLUTTER_AI_RE = re.compile(r"^\s+(google_generative_ai|firebase_ai|firebase_vertexai|tflite_flutter|dart_openai|"
+                           r"openai_dart|langchain\w*|llama_cpp_dart|fllama)\s*:", re.M)
 AI_PACKAGES = {
     "openai", "anthropic", "google-generativeai", "google-genai", "mistralai", "cohere", "groq", "langchain",
     "langchain-openai", "langchain-anthropic", "langchain-community", "llama-index", "llama-cpp-python", "ollama",
@@ -84,7 +104,10 @@ AI_PACKAGES = {
     "@anthropic-ai/sdk", "@google/generative-ai", "@google/genai", "@mistralai/mistralai", "cohere-ai", "groq-sdk",
     "@langchain/openai", "@langchain/core", "langchain", "ollama", "node-llama-cpp", "@huggingface/transformers",
     "@xenova/transformers", "onnxruntime-node", "onnxruntime-web", "@huggingface/inference", "ai", "@ai-sdk/openai",
+    "@google-cloud/vertexai", "@genkit-ai/googleai", "genkit", "@google-cloud/aiplatform", "google-cloud-aiplatform",
+    "vertexai",
 }
+SERVER_TARGET, MOBILE_TARGET = "cheap-vps-4gb", "low-end-android-4gb"
 
 # Local chat models to suggest, largest first, with their official GGUF repositories.
 CHAT_LADDER = [("qwen2.5-7b", "Qwen/Qwen2.5-7B-Instruct-GGUF"), ("qwen2.5-3b", "Qwen/Qwen2.5-3B-Instruct-GGUF"),
@@ -102,6 +125,7 @@ class Usage(BaseModel):
     task: str
     model: str | None = None
     local: bool
+    where: str = "app"  # server | mobile | app (laptop, desktop, scripts)
     location: Location
 
 
@@ -113,12 +137,14 @@ class Alternative(BaseModel):
     tokens_per_s: float | None = None
     speed_source: str | None = None
     runs_on: list[str] = []  # database devices that run it at a usable speed
+    target: str | None = None  # the device it was sized for
     how: str  # how to run it
 
 
 class Finding(BaseModel):
     provider: str
     task: str
+    where: str = "app"
     models: list[str]
     calls: int
     locations: list[Location]
@@ -204,7 +230,12 @@ def _redact(line: str) -> str:
 
 
 def scan(root: Path, include_tests: bool = False) -> tuple[list[Usage], dict[str, list[str]], list[dict], int]:
-    usages, deps, model_files, scanned = [], {"python": [], "node": []}, [], 0
+    return _scan(root, include_tests)[:4]
+
+
+def _scan(root: Path, include_tests: bool = False):
+    usages, deps, model_files, scanned = [], {"python": [], "node": [], "android": [], "flutter": []}, [], 0
+    mentioned: dict[str, set[str]] = {}
     for path in _files(root):
         rel = path.relative_to(root).as_posix()
         if not include_tests and TEST_FILE_RE.search(rel):
@@ -222,12 +253,20 @@ def scan(root: Path, include_tests: bool = False) -> tuple[list[Usage], dict[str
             deps["python"] += _pyproject_deps(path)
         elif re.fullmatch(r"requirements.*\.txt", path.name):
             deps["python"] += _requirements(path)
+        elif re.fullmatch(r"build\.gradle(\.kts)?|libs\.versions\.toml", path.name):
+            deps["android"] += [m.group(0) for m in ANDROID_AI_RE.finditer("\n".join(_lines(path)))]
+        elif path.name == "pubspec.yaml":
+            deps["flutter"] += FLUTTER_AI_RE.findall("\n".join(_lines(path)))
         if ext not in SOURCE_EXT:
             continue
         scanned += 1
         lines = _lines(path)
         # A file's imports tell which provider an unqualified call belongs to.
         file_provider = next((p for p, rx in PROVIDERS for ln in lines[:200] if rx.search(ln)), None)
+        where = "mobile" if MOBILE_RE.search(rel) else "server" if SERVER_PATH_RE.search(rel) or any(
+            SERVER_CODE_RE.search(ln) for ln in lines[:300]) else "app"
+        constants = {m.group(1): m.group(2) for ln in lines if (m := CONSTANT_RE.search(ln))}
+        mentioned[rel] = {m.group(1) for ln in lines for m in MODEL_NAME_RE.finditer(ln)}
         in_docstring = False
         for i, line in enumerate(lines, 1):
             if ext == ".py" or ext == ".ipynb":
@@ -250,18 +289,45 @@ def scan(root: Path, include_tests: bool = False) -> tuple[list[Usage], dict[str
                 task = "embeddings" if re.search(r"SentenceTransformer|embed|MiniLM|bge-|e5-", line, re.I) else "chat"
             if not task or not (provider or pretrained or file_provider):
                 continue
-            # A call spread over lines names its model below: create(\n  model="gpt-4o", ...)
-            named = MODEL_NAME_RE.search(line) or next(
-                (m for ln in lines[i:i + 5] if (m := MODEL_NAME_RE.search(ln))), None)
-            model = pretrained.group(1) if pretrained else named.group(1) if named else None
+            model = pretrained.group(1) if pretrained else _model_near(lines, i - 1, constants)
             provider = provider or file_provider or _provider_for_model(model or "")
             if not provider:
                 continue
-            usages.append(Usage(provider=provider, task=task, model=model, local=provider in LOCAL,
+            usages.append(Usage(provider=provider, task=task, model=model, local=provider in LOCAL, where=where,
                                 location=Location(file=rel, line=i, code=_redact(line))))
-    for k in deps:
-        deps[k] = sorted(set(deps[k]))
-    return usages, deps, model_files, scanned
+    deps = {k: sorted(set(v)) for k, v in deps.items() if v}
+    # mentioned: models named anywhere in each file, for calls that get theirs through a variable
+    return usages, deps, model_files, scanned, mentioned
+
+
+FUNCTION_START_RE = re.compile(r"^\s*(export\s+)?(async\s+|suspend\s+|private\s+|public\s+|static\s+)*"
+                               r"(def|function|fun|func|class)\s|=>\s*\{?\s*$")
+
+
+def _model_near(lines: list[str], idx: int, constants: dict[str, str]) -> str | None:
+    """The model a call uses: on its line; below it when the call continues
+    over several lines (create(\n  model="gpt-4o", ...)); or above it in the
+    same function (model = getGenerativeModel(...) then model.generateContent()).
+    Literally or through a constant. None when it's passed in from elsewhere."""
+    def named(ln: str) -> str | None:
+        if m := MODEL_NAME_RE.search(ln):
+            return m.group(1)
+        name = next((c for c in constants if re.search(rf"\b{c}\b", ln)), None)
+        return constants[name] if name else None
+
+    if found := named(lines[idx]):
+        return found
+    code = _strip_strings(lines[idx])
+    if code.count("(") > code.count(")") or code.count("{") > code.count("}"):
+        for ln in lines[idx + 1:idx + 6]:
+            if found := named(ln):
+                return found
+    for ln in reversed(lines[max(0, idx - 15):idx]):
+        if FUNCTION_START_RE.search(ln):
+            break  # don't borrow a model from outside this function
+        if found := named(ln):
+            return found
+    return None
 
 
 def _provider_for_model(name: str) -> str | None:
@@ -319,7 +385,7 @@ def _node_deps(path: Path) -> list[str]:
 # ---- recommendations ----
 
 def _chat_alternative(device: DeviceProfile, devices: dict[str, DeviceProfile]) -> Alternative:
-    """The biggest local chat model that runs at a usable speed here."""
+    """The biggest local chat model that runs at a usable speed on device."""
     chosen = None
     for name, repo in CHAT_LADDER:
         info = analyze(name)
@@ -336,7 +402,7 @@ def _chat_alternative(device: DeviceProfile, devices: dict[str, DeviceProfile]) 
     return Alternative(
         model=name, repo=repo, variant=v.format.label if v else None, memory_gb=v.total_memory_gb if v else None,
         tokens_per_s=v.tokens_per_s if v else None, speed_source=v.speed_source if v else None,
-        runs_on=_runs_on(info, devices),
+        runs_on=_runs_on(info, devices), target=device.name,
         how=f"nanomesh pull {repo}, then nanomesh serve <file> (or ask your agent: download_model, "
             "start_model_server).")
 
@@ -351,27 +417,31 @@ def _runs_on(info, devices: dict[str, DeviceProfile]) -> list[str]:
     return out
 
 
-def _swap(provider: str, locations: list[Location], alt: Alternative, root: Path) -> str | None:
+def _swap(provider: str, locations: list[Location], where: str) -> str | None:
+    if where == "mobile":
+        return None  # on-device inference is a different library, not a new endpoint
     suffixes = {Path(loc.file).suffix for loc in locations}
     js = bool(suffixes & {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"})
     py = bool(suffixes & {".py", ".ipynb"})
-    url, model = "http://127.0.0.1:8080/v1", "<model name from nanomesh serve>"
+    url = "http://127.0.0.1:8080/v1" if where == "app" else "https://<your-model-server>/v1"
+    key = '"local"' if where == "app" else "process.env.MODEL_SERVER_KEY" if js and not py else '"<your key>"'
+    model = "<model name from nanomesh serve>" if where == "app" else "<model name on your server>"
     blocks = []
     if provider == "LangChain + OpenAI":
         if py:
-            blocks.append(f'ChatOpenAI(model="{model}", base_url="{url}", api_key="local")')
+            blocks.append(f'ChatOpenAI(model="{model}", base_url="{url}", api_key={key})')
         if js:
-            blocks.append(f'new ChatOpenAI({{ model: "{model}", apiKey: "local", configuration: {{ baseURL: "{url}" }} }})')
+            blocks.append(f'new ChatOpenAI({{ model: "{model}", apiKey: {key}, configuration: {{ baseURL: "{url}" }} }})')
         return "\n".join(blocks) or None
     if provider not in ("OpenAI", "Groq", "Mistral", "Google Gemini", "Anthropic", "Cohere"):
         return None
     if provider != "OpenAI":
         blocks.append(f"{provider}'s SDK doesn't speak the OpenAI API: switch these calls to the openai package "
-                      "(pip install openai / npm i openai), which works with the local server.")
+                      "(pip install openai / npm i openai), which works with llama-server.")
     if py:
-        blocks.append(f'Python:     client = OpenAI(base_url="{url}", api_key="local")   # model="{model}"')
+        blocks.append(f'Python:     client = OpenAI(base_url="{url}", api_key={key})   # model="{model}"')
     if js:
-        blocks.append(f'JavaScript: const client = new OpenAI({{ baseURL: "{url}", apiKey: "local" }});   '
+        blocks.append(f'JavaScript: const client = new OpenAI({{ baseURL: "{url}", apiKey: {key} }});   '
                       f'// model: "{model}"')
     return "\n".join(blocks)
 
@@ -394,9 +464,22 @@ def _caveats(task: str, provider: str, models: list[str], code_related: bool = F
     return out
 
 
-def _alternative_for(task: str, device: DeviceProfile, devices, chat_alt) -> Alternative | None:
+def _alternative_for(task: str, where: str, device: DeviceProfile, devices, chat_alt) -> Alternative | None:
     if task == "chat":
-        return chat_alt()
+        alt = chat_alt(where).model_copy()
+        speed = f" at ~{alt.tokens_per_s:g} tok/s" if alt.tokens_per_s else ""
+        if where == "server":
+            alt.how = (f"This code runs on a server, so a model on your laptop can't serve its users. Self-host "
+                       f"{alt.model} on a server you control: a 4 GB VPS runs it{speed}, one request at a time; a GPU "
+                       "server handles many at once. Run llama-server there behind authentication and point this "
+                       "code at it, or keep the cloud API.")
+        elif where == "mobile":
+            alt.how = (f"This code runs in a mobile app: the model would run on the phone itself (llama.cpp's "
+                       f"Android/iOS bindings, or MediaPipe LLM Inference). Sized for a 4 GB Android phone"
+                       f"{speed}. Works offline with no cost per call, but the app has to download the model "
+                       f"({alt.memory_gb:g} GB in memory) once.")
+        return alt
+    device = devices[SERVER_TARGET] if where == "server" else devices[MOBILE_TARGET] if where == "mobile" else device
     if task == "embeddings":
         return Alternative(model="nomic-embed-text-v1.5", repo="nomic-ai/nomic-embed-text-v1.5-GGUF", variant="INT8",
                            memory_gb=0.3, runs_on=[d.name for d in devices.values()],
@@ -421,27 +504,34 @@ def analyze_project(root: Path, device: DeviceProfile, include_tests: bool = Fal
     root = root.expanduser().resolve()
     if not root.is_dir():
         raise ValueError(f"Not a folder: {root}")
-    usages, deps, model_files, scanned = scan(root, include_tests)
+    usages, deps, model_files, scanned, mentioned = _scan(root, include_tests)
     devices = load_devices()
     cache: dict = {}
 
-    def chat_alt():
-        if "chat" not in cache:
-            cache["chat"] = _chat_alternative(device, devices)
-        return cache["chat"]
+    def chat_alt(where: str) -> Alternative:
+        if where not in cache:
+            target = devices[SERVER_TARGET] if where == "server" else devices[MOBILE_TARGET] if where == "mobile" \
+                else device
+            cache[where] = _chat_alternative(target, devices)
+        return cache[where]
 
-    groups: dict[tuple[str, str], list[Usage]] = {}
+    groups: dict[tuple[str, str, str], list[Usage]] = {}
     for u in usages:
-        groups.setdefault((u.provider, u.task), []).append(u)
+        groups.setdefault((u.provider, u.task, u.where), []).append(u)
     findings = []
-    for (provider, task), us in sorted(groups.items(), key=lambda kv: (kv[1][0].local, -len(kv[1]))):
-        models = sorted({u.model for u in us if u.model})
-        f = Finding(provider=provider, task=task, models=models, calls=len(us), local=us[0].local,
+    for (provider, task, where), us in sorted(groups.items(), key=lambda kv: (kv[1][0].local, -len(kv[1]))):
+        models = {u.model for u in us if u.model}
+        if not models:
+            # The model came through a variable (callGemini(prompt, MEME_MODEL)): use the ones the files name.
+            models = {m for u in us for m in mentioned.get(u.location.file, ())
+                      if _provider_for_model(m) in (provider, None) or provider.startswith("LangChain")}
+        models = sorted(models)
+        f = Finding(provider=provider, task=task, where=where, models=models, calls=len(us), local=us[0].local,
                     locations=[u.location for u in us[:MAX_LOCATIONS]])
         if not f.local:
-            f.alternative = _alternative_for(task, device, devices, chat_alt)
+            f.alternative = _alternative_for(task, where, device, devices, chat_alt)
             if f.alternative and task == "chat":
-                f.swap = _swap(provider, f.locations, f.alternative, root)
+                f.swap = _swap(provider, f.locations, where)
             code_related = any(re.search(r"cod(e|er|ing)|program|develop", x, re.I)
                                for x in models + [loc.file for loc in us_locations(us)])
             f.caveats = _caveats(task, provider, models, code_related)
@@ -451,8 +541,10 @@ def analyze_project(root: Path, device: DeviceProfile, include_tests: bool = Fal
 
     cloud = [f for f in findings if not f.local]
     movable = [f for f in cloud if f.alternative and f.alternative.model != "none practical"]
+    places = {f.where for f in cloud}
+    local_word = "a local or self-hosted option" if places & {"server", "mobile"} else "a local option"
     summary = (f"{sum(f.calls for f in cloud)} cloud AI call site(s) in {len({f.provider for f in cloud})} "
-               f"provider(s); {len(movable)} of {len(cloud)} kinds of use can run locally on {device.name}."
+               f"provider(s); {len(movable)} of {len(cloud)} kinds of use have {local_word}."
                if cloud else "No cloud AI API calls found." if not findings else
                "Only local AI found: nothing leaves the machine.")
     return ProjectReport(path=str(root), device=device.name, files_scanned=scanned, findings=findings,

@@ -381,11 +381,13 @@ TOOLS: dict[str, tuple[Callable[..., dict], str, dict]] = {
          "batch": {"type": "integer", "description": "Micro-batch size (default 1)."},
          "lora_rank": {"type": "integer", "description": "LoRA rank (default 16)."}}),
     "analyze_project": (analyze_project,
-        "Find the AI in a codebase: calls to OpenAI, Anthropic, Gemini, Mistral, Cohere, Groq and LangChain, local "
-        "models (transformers, llama.cpp, Ollama), AI dependencies and model files, with file:line. For each "
-        "cloud use: a local model sized for this machine (or a given device), which devices run it, the code "
-        "change to point the SDK at start_model_server, and caveats. Reads files only; skips .env files and masks "
-        "API keys.",
+        "Call this first when asked what AI a project uses or whether it could run locally: it's faster and more "
+        "complete than searching files. Finds calls to OpenAI, Anthropic, Gemini (incl. Firebase/Vertex AI), "
+        "Mistral, Cohere, Groq and LangChain in Python, JS/TS, Kotlin, Java, Swift and Dart, whether each runs on "
+        "a server, in a mobile app or on this machine; also local models (transformers, llama.cpp, Ollama), AI "
+        "dependencies and model files, with file:line. For each cloud use: a local, self-hosted or on-device "
+        "model sized for where it runs, which devices run it, the code change, and caveats. Reads files only; "
+        "skips .env files and masks API keys.",
         {"path": {"type": "string", "description": "Project folder (the workspace root). Default: current folder."},
          "device": _DEVICE,
          "include_tests": {"type": "boolean", "description": "Also count calls in test files (default false)."}}),

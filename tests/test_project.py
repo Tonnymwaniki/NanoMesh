@@ -133,8 +133,7 @@ def test_local_transformers_model_gets_a_lighter_option(project):
     assert "full precision" in local.alternative.how
     # Cloud findings come first; the summary counts only cloud calls.
     assert not report.findings[0].local
-    assert report.summary == ("7 cloud AI call site(s) in 3 provider(s); 5 of 5 kinds of use can run locally on "
-                              "HP EliteBook 840 G6.")
+    assert report.summary == "7 cloud AI call site(s) in 3 provider(s); 5 of 5 kinds of use have a local option."
 
 
 def test_phone_gets_a_smaller_model(project):
@@ -195,9 +194,72 @@ def test_edge_cases(tmp_path):
         # The call spans lines: its model comes from below. The docstring, the
         # string example and the commented-out line aren't calls.
         ("OpenAI", "chat", "svc/multi.py", 6, "gpt-4o-mini"),
-        ("Google Gemini", "chat", "svc/gem.py", 3, None),
+        ("Google Gemini", "chat", "svc/gem.py", 3, "gemini-1.5-flash"),  # model set on the line above
         ("Ollama (local)", "chat", "svc/local.py", 2, "llama3.2"),
     }
     # Tests are left out unless asked for.
     with_tests = {u.location.file for u in scan(tmp_path, include_tests=True)[0]}
     assert {"tests/test_multi.py", "src/bot.test.ts"} <= with_tests
+
+
+# Shaped like a real app: an Android client and a Firebase Functions backend
+# that calls Gemini through a helper, with the model names in constants.
+ROAST = {
+    "functions/index.js": '''const functions = require("firebase-functions");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+const GEMINI_MEME_MODEL = process.env.MEME_MODEL || "gemini-3-flash-preview";
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+async function callGemini(prompt, modelName) {
+  const model = genAI.getGenerativeModel({ model: modelName });
+  const result = await model.generateContent(prompt);
+  return result.response.text();
+}
+
+exports.meme = functions.https.onCall(async (data) => callGemini(data.prompt, GEMINI_MEME_MODEL));
+exports.roast = functions.https.onCall(async (data) => callGemini(data.prompt, "gemini-2.5-flash"));
+''',
+    "functions/package.json": json.dumps({"dependencies": {"firebase-functions": "^6", "@google/generative-ai": "^0.21"}}),
+    "app/src/main/java/com/roast/Assistant.kt": '''package com.roast
+import com.google.firebase.Firebase
+import com.google.firebase.ai.ai
+import com.google.firebase.ai.type.GenerativeBackend
+
+class Assistant {
+    private val model = Firebase.ai(backend = GenerativeBackend.googleAI()).generativeModel("gemini-2.5-flash")
+    suspend fun tip(stats: String): String? = model.generateContent("Give a tip for $stats").text
+}
+''',
+    "app/build.gradle.kts": '''dependencies {
+    implementation(platform("com.google.firebase:firebase-bom:34.0.0"))
+    implementation("com.google.firebase:firebase-ai")
+}
+''',
+}
+
+
+def test_firebase_backend_and_android_app(tmp_path):
+    for name, text in ROAST.items():
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(text, encoding="utf-8")
+    report = analyze_project(tmp_path, get_device("hp-elitebook-840-g6"))
+    server = next(f for f in report.findings if f.where == "server")
+    mobile = next(f for f in report.findings if f.where == "mobile")
+
+    # The backend's one SDK call, with both models it's given through the helper.
+    assert (server.provider, server.task, server.calls) == ("Google Gemini", "chat", 1)
+    assert server.locations[0].file == "functions/index.js" and server.locations[0].line == 8
+    assert server.models == ["gemini-2.5-flash", "gemini-3-flash-preview"]
+    # A laptop can't serve the app's users: the option is a server, sized for a cheap VPS.
+    assert server.alternative.target == "Generic cheap VPS (2 vCPU, 4 GB)"
+    assert "can't serve its users" in server.alternative.how
+    assert "https://<your-model-server>/v1" in server.swap and "127.0.0.1" not in server.swap
+
+    # The Android app calls Gemini through Firebase AI Logic: on-device is the option, sized for a phone.
+    assert (mobile.provider, mobile.task, mobile.models) == ("Google Gemini", "chat", ["gemini-2.5-flash"])
+    assert mobile.locations[0].file.endswith("Assistant.kt") and mobile.locations[0].line == 8
+    assert mobile.alternative.target == "Generic low-end Android (4 GB)" and mobile.swap is None
+    assert "on the phone itself" in mobile.alternative.how
+
+    assert report.dependencies == {"node": ["@google/generative-ai"], "android": ["com.google.firebase:firebase-ai"]}
+    assert report.summary.endswith("have a local or self-hosted option.")
