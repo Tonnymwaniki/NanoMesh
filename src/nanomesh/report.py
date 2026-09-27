@@ -467,7 +467,9 @@ def project_view(r) -> Group:
 
 
 def _size(gb: float) -> str:
-    return f"{gb * 1024:.0f} MB" if gb < 0.1 else f"{gb:g} GB"
+    if gb < 0.1:
+        return f"{gb * 1024:.0f} MB"
+    return f"{gb:.2g} GB" if gb < 10 else f"{gb:,.0f} GB"
 
 
 def fit_card_view(c) -> Panel:
@@ -599,13 +601,19 @@ def data_search_view(cards, device_name: str) -> Group | Text:
     if not cards:
         return Text("No datasets found. Try fewer or different words.", style="yellow")
     t = Table(title=f"Datasets · sized for {device_name}", header_style="bold", title_justify="left")
-    for col in ("Dataset", "Source", "Rows", "Download", "Memory", "Licence", "Downloads"):
+    for col in ("Dataset", "Holds", "Rows", "Download", "Memory", "Licence", "Downloads"):
         t.add_column(col, overflow="fold")
     for c in cards:
         mem = Text(_size(c.memory_gb) if c.memory_gb is not None else "—",
                    style="yellow" if c.fits_memory is False else "")
-        t.add_row(c.id, c.source, f"{c.rows:,}" if c.rows is not None else "—",
-                  (_size(c.download_gb) + (f" · {c.data_cost}" if c.data_cost else "")) if c.download_gb else "—",
-                  mem, c.license or "—", f"{c.downloads:,}" if c.downloads is not None else "—")
-    return Group(t, Text("Details and a preview: nanomesh data card <dataset>  (add --for-model qwen2.5-1.5b "
-                         "for fine-tuning time)", style="dim"))
+        dl = Text((_size(c.download_gb) + (f" · {c.data_cost}" if c.data_cost else "")) if c.download_gb else "—",
+                  style="yellow" if (c.download_gb or 0) > 2 else "")
+        holds = (c.modality or "—").split(" (")[0] + ("" if c.source == "huggingface" else f" · {c.source}")
+        t.add_row(c.id, holds, f"{c.rows:,}" if c.rows is not None else "—", dl, mem, c.license or "—",
+                  f"{c.downloads:,}" if c.downloads is not None else "—")
+    notes = [Text("Details and a preview: nanomesh data card <dataset>  (add --for-model qwen2.5-1.5b "
+                  "for fine-tuning time)", style="dim")]
+    if any((c.download_gb or 0) > 2 for c in cards):
+        notes.insert(0, Text("Yellow downloads are big: the card shows how many rows a 0.5 GB slice holds, and "
+                             "streaming reads them without the full download.", style="yellow"))
+    return Group(t, *notes)

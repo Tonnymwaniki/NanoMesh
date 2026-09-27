@@ -184,3 +184,11 @@ def test_cli(local):
                                    "--for-model", "qwen2.5-0.5b", "--json"])
     data = json.loads(out.output)
     assert data["modality"].startswith("chat") and data["training"]["method"] == "lora"
+
+
+def test_fine_tuning_counts_only_the_training_split():
+    # IMDb: 25k train, 25k test, 50k unsupervised. Only train is fine-tuned on.
+    c = datasets.hf_card("stanfordnlp/imdb", get_device(ELITEBOOK), fetch)
+    tf = datasets.training_fit(c, "qwen2.5-1.5b", get_device(ELITEBOOK))
+    assert tf.tokens == int(25_000 * c.avg_tokens_per_row)
+    assert tf.advice[0] == "Counting the training split: 25,000 of 100,000 rows."

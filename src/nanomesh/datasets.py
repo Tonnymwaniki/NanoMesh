@@ -398,11 +398,16 @@ def training_fit(data: DataCard, model_name: str, device: DeviceProfile, *, epoc
     tp = train_plan(info, device, seq_len=seq_len)
     best = next((o for o in tp.options if o.method == tp.recommended), None)
     per_row = min(data.avg_tokens_per_row or seq_len / 2, seq_len)
-    tokens = int((data.rows or 0) * per_row)
+    # Fine-tuning uses the training split(s): test, validation and unlabelled splits don't count.
+    train_rows = sum(n or 0 for name, n in data.splits.items() if re.search(r"(^|/)train\b", name))
+    rows = train_rows or data.rows or 0
+    tokens = int(rows * per_row)
     # Training compute: ~6 FLOPs per parameter per token for full fine-tuning; LoRA/QLoRA skip the
     # weight gradients of the frozen base, ~4.
     flops = (6 if tp.recommended == "full" else 4) * info.params * tokens * epochs
     advice = []
+    if train_rows and data.rows and train_rows < data.rows:
+        advice.append(f"Counting the training split: {train_rows:,} of {data.rows:,} rows.")
     if not tokens:
         advice.append("The dataset's size in rows isn't known, so training time can't be estimated.")
     hours_here = None
@@ -417,7 +422,7 @@ def training_fit(data: DataCard, model_name: str, device: DeviceProfile, *, epoc
     cloud = {name: round(flops / (tf * 1e12) / 3600, 2) for name, tf in CLOUD_GPUS.items()} if tokens else {}
     if hours_here and hours_here > 24:
         advice.append(f"~{hours_here:,.0f} h here: use a cloud GPU, or train on a slice first "
-                      f"({int(data.rows * 24 / hours_here):,} rows fit in a day here)" if data.rows else "")
+                      f"({int(rows * 24 / hours_here):,} rows fit in a day here)" if rows else "")
     if data.avg_tokens_per_row and data.avg_tokens_per_row > seq_len:
         advice.append(f"Rows average ~{data.avg_tokens_per_row:,.0f} tokens but training cuts them at {seq_len}: "
                       "raise --seq-len (more memory) or split long rows.")
