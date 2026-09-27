@@ -12,6 +12,7 @@ from __future__ import annotations
 import contextlib
 import json
 import sys
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
@@ -27,6 +28,7 @@ from nanomesh.model import analyze
 from nanomesh.planner import QUALITY_TIERS, Plan, Requirements, add_live_advice, battery_advice, plan
 
 PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"]
+MAX_WAIT_S = 50  # longest a tool call blocks; MCP clients time out calls after a minute or so
 INSTRUCTIONS = (
     "NanoMesh knows this developer's actual machine: exact device model, live power/thermal conditions, models "
     "on disk and benchmarks measured here. Use it before recommending local models, quantization, runtimes or "
@@ -36,6 +38,14 @@ INSTRUCTIONS = (
     "It can also get a model running end to end: search_models (Hugging Face, sized for this machine), "
     "download_model, benchmark_model, then start_model_server for an OpenAI-compatible endpoint. Downloads and "
     "benchmarks run as jobs: poll job_status. Always tell the user the download size before downloading."
+)
+
+
+LLAMA_MISSING = (
+    "llama.cpp (llama-bench, llama-server) not found. Ask the user whether it's installed before downloading it: "
+    "if it is, running `nanomesh doctor` once in a terminal where NANOMESH_LLAMA_CPP is set makes NanoMesh remember "
+    "the folder; else they can unpack a release from github.com/ggml-org/llama.cpp/releases to C:\\llama.cpp "
+    "(Windows) or ~/llama.cpp, where NanoMesh looks automatically."
 )
 
 
@@ -183,14 +193,23 @@ def download_model(repo: str, file: str | None = None) -> dict:
         return {**info, "status": "already downloaded", "path": str(dp.target)}
 
     def run(h: jobs.Handle) -> dict:
+        t0, start = time.monotonic(), dp.have_bytes
+
         def progress(done: int, total: int):
-            h.update(done / total if total else None, f"{done / 1024**3:.2f} of {total / 1024**3:.2f} GB")
+            elapsed = time.monotonic() - t0
+            rate = (done - start) / elapsed if elapsed > 2 and done > start else None
+            eta = (total - done) / rate if rate else None
+            h.update(done / total if total else None,
+                     f"{done / 1024**3:.2f} of {total / 1024**3:.2f} GB"
+                     + (f" · {rate / 1e6:.1f} MB/s · ~{_duration(eta)} left" if eta is not None else ""), eta)
         path = download(dp, progress, h.cancel)
         return {"path": str(path), "next": "benchmark_model(path) to measure it here, or "
                                            "start_model_server(path) to use it."}
 
     job = jobs.start("download", f"{repo}/{dp.file.name}", run)
-    return {**info, "job_id": job.id, "status": "started", "next": "Poll job_status(job_id) for progress."}
+    return {**info, "job_id": job.id, "status": "started",
+            "next": f"Call job_status(job_id, wait_seconds={MAX_WAIT_S}): it returns when the download finishes or "
+                    "after that long, with speed and time left. Don't call it more often than that."}
 
 
 def benchmark_model(path: str, quick: bool = True) -> dict:
@@ -204,7 +223,7 @@ def benchmark_model(path: str, quick: bool = True) -> dict:
         raise ToolError(f"Not a .gguf file: {path}")
     tc = find_toolchain()
     if not tc.bench:
-        raise ToolError("llama-bench not found; see environment_doctor.")
+        raise ToolError(LLAMA_MISSING)
     device = _local()
 
     def run(h: jobs.Handle) -> dict:
@@ -220,14 +239,20 @@ def benchmark_model(path: str, quick: bool = True) -> dict:
     job = jobs.start("benchmark", f.name, run)
     minutes = "about 1 minute" if quick else "2-4 minutes (warms the CPU up first)"
     return {"job_id": job.id, "status": "started", "expected": minutes,
-            "next": "Poll job_status(job_id); ask the user to leave the machine alone meanwhile."}
+            "next": f"Call job_status(job_id, wait_seconds={MAX_WAIT_S}) until it's done; ask the user to leave the "
+                    "machine alone meanwhile."}
 
 
-def job_status(job_id: str | None = None) -> dict:
+def _duration(seconds: float) -> str:
+    return f"{seconds / 60:.0f} min" if seconds >= 90 else f"{seconds:.0f} s"
+
+
+def job_status(job_id: str | None = None, wait_seconds: float = 0) -> dict:
     from nanomesh import jobs
 
     if job_id:
-        job = jobs.get(job_id)
+        # Waiting here saves the agent (and the user's credits) dozens of polls.
+        job = jobs.get(job_id, wait_s=min(max(wait_seconds or 0, 0), MAX_WAIT_S))
         if job is None:
             raise ToolError(f"No job {job_id} (jobs are forgotten when the MCP server restarts; downloads resume "
                             "if started again).")
@@ -365,8 +390,11 @@ TOOLS: dict[str, tuple[Callable[..., dict], str, dict]] = {
         {"path": {"type": "string", "description": "Path to a .gguf file."},
          "quick": {"type": "boolean", "description": "Skip the warm-up (default true)."}}),
     "job_status": (job_status,
-        "Progress and result of a download or benchmark job; all jobs if no id is given.",
-        {"job_id": {"type": "string"}}),
+        "Progress and result of a download or benchmark job (all jobs if no id is given). Set wait_seconds to wait "
+        "for the job to finish before answering, instead of calling this repeatedly.",
+        {"job_id": {"type": "string"},
+         "wait_seconds": {"type": "number", "description": f"Wait up to this long (max {MAX_WAIT_S}) for the job "
+                                                           "to finish. Default 0: answer at once."}}),
     "cancel_job": (cancel_job, "Cancel a running download or benchmark job. Downloads resume if started again.",
         {"job_id": {"type": "string"}}),
     "start_model_server": (start_model_server,

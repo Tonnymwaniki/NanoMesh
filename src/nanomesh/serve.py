@@ -102,8 +102,8 @@ def start(model_path: Path, *, port: int = DEFAULT_PORT, context: int = 4096, th
     server and its state: 'ok', or 'loading' if it's still loading after wait_s."""
     tc = tc or find_toolchain()
     if not tc.server:
-        raise ToolchainError("llama-server not found. It ships with llama.cpp releases; set NANOMESH_LLAMA_CPP "
-                             "to the folder that has it.")
+        raise ToolchainError("llama-server not found. It ships with llama.cpp releases: unpack one to C:\\llama.cpp "
+                             "(Windows) or ~/llama.cpp, or set NANOMESH_LLAMA_CPP to its folder.")
     model_path = gguf_parts(model_path.expanduser().resolve())[0]
     if not model_path.is_file():
         raise ToolchainError(f"No such model file: {model_path}")

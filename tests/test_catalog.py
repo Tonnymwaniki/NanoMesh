@@ -433,3 +433,50 @@ def test_mcp_benchmark_job_saves_a_measurement(tmp_path, monkeypatch):
     assert job["result"]["variant"] == "Q4_K_M" and job["result"]["gen_tokens_per_s"]
     assert [r.format for r in store.load()] == ["Q4_K_M"]
     assert mcp.call_tool("benchmark_model", {"path": str(tmp_path / "nope.gguf")})["isError"]
+
+
+# ---- finding llama.cpp from an editor's MCP server ----
+
+def _fake_bin(folder: Path, name: str) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    exe = folder / (name + (".exe" if sys.platform == "win32" else ""))
+    exe.write_text("")
+    exe.chmod(0o755)
+    return exe
+
+
+def test_llama_cpp_found_once_is_remembered(tmp_path, monkeypatch):
+    from nanomesh.toolchain import find_toolchain
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setenv("PATH", "")
+    bench = _fake_bin(tmp_path / "tools" / "llama" / "build" / "bin", "llama-bench")
+    monkeypatch.setenv("NANOMESH_LLAMA_CPP", str(tmp_path / "tools" / "llama"))
+    assert find_toolchain().bench == bench
+    # VS Code starts the MCP server without the terminal's NANOMESH_LLAMA_CPP.
+    monkeypatch.delenv("NANOMESH_LLAMA_CPP")
+    assert find_toolchain().bench == bench
+
+
+def test_llama_cpp_in_the_usual_folder_needs_no_setup(tmp_path, monkeypatch):
+    from nanomesh.toolchain import find_toolchain
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.delenv("NANOMESH_LLAMA_CPP", raising=False)
+    assert find_toolchain().server is None
+    server = _fake_bin(tmp_path / "home" / "llama.cpp", "llama-server")
+    assert find_toolchain().server == server
+
+
+def test_job_status_can_wait_for_the_job():
+    def slow(h):
+        time.sleep(0.3)
+        return {"ok": True}
+
+    started = jobs.start("test", "slow", slow)
+    assert mcp.call_tool("job_status", {"job_id": started.id})["structuredContent"]["status"] == "running"
+    t0 = time.monotonic()
+    job = mcp.call_tool("job_status", {"job_id": started.id, "wait_seconds": 30})["structuredContent"]
+    assert job["status"] == "done" and job["result"] == {"ok": True}
+    assert time.monotonic() - t0 < 5  # returned when the job finished, not after 30 s

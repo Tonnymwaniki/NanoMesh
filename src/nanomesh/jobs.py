@@ -23,6 +23,7 @@ class Job(BaseModel):
     status: str = "running"  # running | done | failed | cancelled
     progress: float | None = None  # 0-1 when known
     message: str | None = None
+    eta_s: int | None = None  # seconds left, when known
     result: dict | None = None
     error: str | None = None
     started: str
@@ -35,12 +36,15 @@ class Handle:
     def __init__(self, job: Job):
         self.job = job
         self.cancel = threading.Event()
+        self.done = threading.Event()
 
-    def update(self, progress: float | None = None, message: str | None = None) -> None:
+    def update(self, progress: float | None = None, message: str | None = None, eta_s: float | None = None) -> None:
         if progress is not None:
             self.job.progress = round(min(max(progress, 0.0), 1.0), 3)
         if message is not None:
             self.job.message = message
+        if eta_s is not None:
+            self.job.eta_s = int(eta_s)
 
 
 _jobs: dict[str, Handle] = {}
@@ -62,14 +66,19 @@ def start(kind: str, description: str, fn: Callable[[Handle], dict]) -> Job:
         except Exception as e:  # noqa: BLE001 - reported to the agent, not raised
             job.status = "cancelled" if handle.cancel.is_set() else "failed"
             job.error = str(e)
+        job.eta_s = None
         job.finished = now()
+        handle.done.set()
 
     threading.Thread(target=run, name=job.id, daemon=True).start()
     return job
 
 
-def get(job_id: str) -> Job | None:
+def get(job_id: str, wait_s: float = 0) -> Job | None:
+    """The job; with wait_s, first wait up to that long for it to finish."""
     h = _jobs.get(job_id)
+    if h and wait_s > 0:
+        h.done.wait(wait_s)
     return h.job if h else None
 
 
