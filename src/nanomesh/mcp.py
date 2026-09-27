@@ -204,12 +204,16 @@ TOOLS: dict[str, tuple[Callable[..., dict], str, dict]] = {
          "lora_rank": {"type": "integer", "description": "LoRA rank (default 16)."}}),
 }
 REQUIRED = {"plan_model": ["model"], "training_plan": ["model"]}
+# Every tool only reads this machine's state and NanoMesh's own data, so
+# clients such as VS Code can ask the user less often.
+ANNOTATIONS = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}
 
 
 def tool_list() -> list[dict]:
     return [{"name": name, "description": desc,
              "inputSchema": {"type": "object", "properties": props, "required": REQUIRED.get(name, []),
-                             "additionalProperties": False}}
+                             "additionalProperties": False},
+             "annotations": {"title": name.replace("_", " ").capitalize(), **ANNOTATIONS}}
             for name, (_, desc, props) in TOOLS.items()]
 
 

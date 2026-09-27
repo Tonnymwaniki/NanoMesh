@@ -153,6 +153,9 @@ def test_mcp_handshake_and_tool_list():
     assert names == {"device_passport", "current_conditions", "plan_model", "list_local_models",
                      "benchmark_results", "environment_doctor", "training_plan"}
     assert all(t["inputSchema"]["type"] == "object" for t in tools["result"]["tools"])
+    # Nothing changes the machine: clients may skip the confirmation prompt.
+    assert all(t["annotations"]["readOnlyHint"] and not t["annotations"]["destructiveHint"]
+               for t in tools["result"]["tools"])
 
 
 def test_mcp_unknown_version_gets_latest():
