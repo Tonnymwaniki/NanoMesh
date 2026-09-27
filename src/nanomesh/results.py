@@ -132,11 +132,16 @@ def evidence(device: DeviceProfile, model: ModelInfo, results: list[Result] | No
     # Roofline calibration. Generating a token streams the whole model through
     # memory once, so tok/s x file size is the bandwidth a run achieved; the
     # best run shows what the device can deliver. Runs well below that were
-    # compute-bound, and tok/s x params gives the CPU's throughput ceiling.
+    # compute-bound: the CPU couldn't unpack the weights any faster.
     runs = [(r.gen_tokens_per_s * r.file_size_gb * GIB_TO_GB, r.gen_tokens_per_s * r.model_params / 1e9)
             for r in results if r.gen_tokens_per_s and r.file_size_gb >= 0.05]
     bandwidth = max((bw for bw, _ in runs), default=None)
-    compute = max((c for bw, c in runs if bw < bandwidth * COMPUTE_BOUND_BELOW), default=None) if runs else None
+    # Every run proves the CPU manages at least tok/s x params, so the ceiling
+    # is the best any run achieved (a 7B model gets more out of the CPU than a
+    # 1.5B one: 30 vs 27 G params/s on an i5-8365U). It only applies once some
+    # run was actually held back by it; otherwise it's just a loose lower bound.
+    cpu_bound = any(bw < bandwidth * COMPUTE_BOUND_BELOW for bw, _ in runs)
+    compute = max(c for _, c in runs) if cpu_bound else None
 
     return Evidence(speeds=speeds, quality=quality, model_params=params,
                     effective_bandwidth_gbps=round(bandwidth, 1) if bandwidth else None,

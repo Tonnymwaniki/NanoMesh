@@ -3,6 +3,10 @@
 tests/data/elitebook-840-g6-qwen2.5-1.5b.jsonl: HP EliteBook 840 G6
 (i5-8365U, 16 GB DDR4-2400, Windows 11), official Qwen2.5-1.5B-Instruct GGUFs,
 llama.cpp CPU build, `nanomesh benchmark` with 7.6 GB free.
+
+tests/data/elitebook-840-g6-qwen2.5-7b.jsonl: the same laptop, the official
+two-part Qwen2.5-7B-Instruct Q4_K_M GGUF, `--no-quality`, run afterwards to
+check the 1.5B calibration's 7B prediction.
 """
 
 from pathlib import Path
@@ -81,3 +85,29 @@ def test_balanced_falls_back_to_fastest_when_nothing_is_usable(elitebook_results
     # Asking for quality instead keeps the higher-precision, slower variant.
     q = plan(model, device, Requirements(prefer="quality"), ev)
     assert q.recommended == "Q8_0"
+
+
+def test_calibration_from_1_5b_predicted_the_7b_speed(elitebook_results):
+    # Before the 7B run, only the 1.5B results existed. The plan then said:
+    device, model = get_device("hp-elitebook-840-g6").model_copy(update={"ram_gb": 16}), analyze("qwen2.5-7b")
+    q4 = _v(plan(model, device, evidence=store.evidence(device, model)), "Q4_K_M")
+    measured = 3.96  # tests/data/elitebook-840-g6-qwen2.5-7b.jsonl
+    assert q4.speed_source == "calibrated"
+    # Predicted 3.5 tok/s: 12% low. (The uncalibrated spec-sheet estimate, 4.4,
+    # was 11% high: calibration's real win on this laptop was the CPU ceiling
+    # for low-bit formats, see test_calibrated_speeds_respect_the_compute_ceiling.)
+    assert abs(q4.tokens_per_s - measured) / measured < 0.15
+
+
+def test_split_7b_measurement_is_used_by_plan(elitebook_results):
+    rows = (DATA / "elitebook-840-g6-qwen2.5-7b.jsonl").read_text()
+    with store.results_path().open("a", encoding="utf-8") as f:
+        f.write(rows)
+    device, model = get_device("hp-elitebook-840-g6"), analyze("qwen2.5-7b")
+    q4 = _v(plan(model, device, evidence=store.evidence(device, model)), "Q4_K_M")
+    assert (q4.tokens_per_s, q4.speed_source) == (3.96, "measured")
+    # The 7B run raised the CPU ceiling learned from the 1.5B runs.
+    ev = store.evidence(device, model)
+    assert ev.compute_gparams_per_s == pytest.approx(3.96 * 7.6156, abs=0.1)
+    q3 = _v(plan(model, device, evidence=ev), "Q3_K_M")
+    assert q3.speed_source == "calibrated" and q3.tokens_per_s >= 3.96

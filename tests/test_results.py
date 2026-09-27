@@ -42,7 +42,7 @@ def test_evidence_matches_device_and_model():
     # Achieved bandwidths (tok/s x GB): 16.4, 19.7, 16.1. The best is the device's
     # bandwidth; runs well below it were CPU-bound and set the compute ceiling.
     assert ev.effective_bandwidth_gbps == pytest.approx(19.7, abs=0.1)
-    assert ev.compute_gparams_per_s == pytest.approx(3.5 * 7.6156, abs=0.1)
+    assert ev.compute_gparams_per_s == pytest.approx(4.2 * 7.6156, abs=0.1)  # best run overall
 
 
 def test_measurements_override_estimates_in_plan():
