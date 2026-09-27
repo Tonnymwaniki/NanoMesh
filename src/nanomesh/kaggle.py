@@ -69,8 +69,10 @@ def search_models(query: str, device: DeviceProfile, task: str | None = None, *,
         if not ref:
             continue
         names = [ref, m.get("title") or "", m.get("slug") or ""]
+        frameworks = [i.get("framework") for i in m.get("instances") or [] if isinstance(i, dict)]
         card = next((c for n in names if n and (c := fit(n, device, task=task if task != "text generation" else None,
-                                                          license=m.get("licenseName")))), None)
+                                                          license=m.get("licenseName"),
+                                                          tags=[m.get("framework"), *frameworks]))), None)
         if card and (task is None or card.task == task):
             out.append(TaskResult(source="kaggle", id=ref, url=m.get("url") or f"https://www.kaggle.com/models/{ref}",
                                   downloads=m.get("downloadCount") or m.get("downloads"), card=card))

@@ -259,6 +259,42 @@ def memory_gb(fam: Family, member: Member) -> float:
 
 # ---- the card ----
 
+# Formats only some devices can run, whatever their memory.
+PLATFORM_ONLY = [
+    (re.compile(r"coreml|whisperkit|\.mlmodel|mlpackage"), "apple", "it's a Core ML model, which runs on Apple devices only"),
+    (re.compile(r"(^|[^a-z])mlx([^a-z]|$)"), "apple-silicon", "it's an MLX model, which runs on Apple Silicon Macs only"),
+    (re.compile(r"tensorrt|(^|[^a-z])(trt|awq|gptq|exl2)([^a-z]|$)"), "nvidia", "it needs an NVIDIA GPU (TensorRT, "
+                                                                            "AWQ, GPTQ or EXL2 format)"),
+]
+
+
+def _is_apple(device: DeviceProfile) -> bool:
+    os_name = (device.os or "").lower()
+    return "mac" in os_name or "darwin" in os_name or "ios" in os_name or any(g.vendor == "Apple" for g in device.gpus)
+
+
+def cannot_run(name: str, tags: list[str] | None, device: DeviceProfile) -> str | None:
+    """Why this device can't run the model's format at all, or None."""
+    text = " ".join([name.lower(), *[t.lower() for t in tags or [] if t]])
+    for pattern, needs, why in PLATFORM_ONLY:
+        if not pattern.search(text):
+            continue
+        ok = {"apple": _is_apple(device),
+              "apple-silicon": _is_apple(device) and device.arch in ("arm64", "aarch64"),
+              "nvidia": any(g.vendor == "NVIDIA" for g in device.gpus)}[needs]
+        if not ok:
+            return why
+    return None
+
+
+def _approx(n: float) -> str:
+    """Round big counts to two significant figures: 112,608 -> 110,000."""
+    if n < 100:
+        return f"{n:.0f}"
+    digits = len(str(int(n))) - 2
+    return f"{round(n, -digits):,.0f}"
+
+
 def _data_cost(gb: float) -> str | None:
     price = config.get("data_price")
     if not price or not gb:
@@ -276,7 +312,7 @@ def _battery(device: DeviceProfile, fam: Family, rate: float | None) -> str | No
     if fam.task == "speech-to-text":
         return f"~{hours * rate:.0f} h of audio per full charge (battery life measured under AI load: {hours:g} h)"
     what = {"images/s": "images", "sentences/s": "sentences"}.get(fam.unit, "units")
-    return f"~{hours * 3600 * rate:,.0f} {what} per full charge (battery life measured under AI load: {hours:g} h)"
+    return f"~{_approx(hours * 3600 * rate)} {what} per full charge (battery life measured under AI load: {hours:g} h)"
 
 
 def card(fam: Family, member: Member, device: DeviceProfile, *, name: str | None = None,
@@ -387,8 +423,18 @@ def generic_card(name: str, task: str, params: int, device: DeviceProfile, *, do
 
 
 def fit(name: str, device: DeviceProfile, *, download_bytes: int | None = None, license: str | None = None,
-        task: str | None = None, params: int | None = None) -> FitCard | None:
-    """The Fit Card for a model name, repository id or file."""
+        task: str | None = None, params: int | None = None, tags: list[str] | None = None) -> FitCard | None:
+    """The Fit Card for a model name, repository id or file. tags: what the
+    source says about its format (Hugging Face tags and library)."""
+    c = _fit(name, device, download_bytes=download_bytes, license=license, task=task, params=params)
+    if c and (why := cannot_run(name, tags, device)):
+        c.fits, c.usable = False, False
+        c.notes.insert(0, f"Can't run on {device.name}: {why}. Look for its GGUF, ONNX or original version.")
+    return c
+
+
+def _fit(name: str, device: DeviceProfile, *, download_bytes: int | None = None, license: str | None = None,
+         task: str | None = None, params: int | None = None) -> FitCard | None:
     path = Path(name).expanduser()
     if path.is_file() and path.suffix == ".gguf":
         return text_card(str(path), device, download_bytes=path.stat().st_size, license=license)

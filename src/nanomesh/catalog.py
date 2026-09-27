@@ -314,7 +314,8 @@ def search_task(query: str, task: str, device: DeviceProfile, *, limit: int = 5,
             except CatalogError:
                 meta = m
             total = (meta.get("safetensors") or {}).get("total")
-            c = fit(m["id"], device, license=_license(meta), task=task, params=total)
+            tags = list(m.get("tags") or meta.get("tags") or []) + [m.get("library_name") or meta.get("library_name")]
+            c = fit(m["id"], device, license=_license(meta), task=task, params=total, tags=tags)
             if c:
                 out.append(TaskResult(source="huggingface", id=m["id"], url=f"{HF}/{m['id']}",
                                       downloads=m.get("downloads"), card=c))

@@ -288,3 +288,37 @@ def test_card_for_every_member_on_every_device():
             for m in fam.members:
                 c = card(fam, m, device)
                 assert c.memory_gb > 0 and c.download_gb > 0 and c.speed and c.speed > 0
+
+
+# ---- formats only some devices can run ----
+
+@pytest.mark.parametrize("name, tags, runs_on, not_on", [
+    ("argmaxinc/whisperkit-coreml", ["coreml", "whisper"], "macbook-air-m1-8gb", "hp-elitebook-840-g6"),
+    ("mlx-community/whisper-small-mlx", ["mlx"], "macbook-air-m1-8gb", "rtx-3060-12gb"),
+    ("TheBloke/some-7B-GPTQ", ["gptq"], "rtx-3060-12gb", "hp-elitebook-840-g6"),
+])
+def test_platform_only_formats(name, tags, runs_on, not_on):
+    from nanomesh.fit import cannot_run
+
+    assert cannot_run(name, tags, get_device(runs_on)) is None
+    assert cannot_run(name, tags, get_device(not_on))
+    assert cannot_run("openai/whisper-small", ["transformers", "pytorch"], get_device(not_on)) is None
+
+
+def test_search_puts_models_this_device_cant_run_last():
+    # The real top result for speech on the EliteBook: Core ML, Apple-only.
+    listing = [{"id": "argmaxinc/whisperkit-coreml", "downloads": 10_997_197, "tags": ["whisper", "coreml"],
+                "library_name": "whisperkit"},
+               {"id": "Systran/faster-whisper-small", "downloads": 3_212_472, "library_name": "ctranslate2"}]
+    found = catalog.search_task("", "speech", get_device("hp-elitebook-840-g6"), fetch=fake_fetch(listing, {}))
+    assert [r.id for r in found] == ["Systran/faster-whisper-small", "argmaxinc/whisperkit-coreml"]
+    coreml = found[1].card
+    assert not coreml.fits and coreml.notes[0].startswith("Can't run on HP EliteBook 840 G6: it's a Core ML model")
+    mac = catalog.search_task("", "speech", get_device("macbook-air-m1-8gb"), fetch=fake_fetch(listing, {}))
+    assert mac[0].id == "argmaxinc/whisperkit-coreml" and mac[0].card.fits
+
+
+def test_big_counts_are_rounded():
+    from nanomesh.fit import _approx
+
+    assert [_approx(x) for x in (42.4, 112_608, 1_234_567, 999)] == ["42", "110,000", "1,200,000", "1,000"]

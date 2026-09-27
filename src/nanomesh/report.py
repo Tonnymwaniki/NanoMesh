@@ -478,6 +478,8 @@ def fit_card_view(c) -> Panel:
     if c.memory_gb is not None:
         fits.append(f" · {c.memory_gb:g} GB of the {c.budget_gb:g} GB budget", style="")
     rows = [("Fits", fits)]
+    if not c.fits and c.notes and c.notes[0].startswith("Can't run on"):
+        fits.append(f" · {c.notes[0].split(': ', 1)[1]}", style="red")
     if c.speed is not None:
         sp = Text(f"{c.speed:g} {c.speed_unit}", style="bold" if c.usable else "yellow")
         sp.append(f" ({c.speed_source})", style="dim")
