@@ -436,6 +436,81 @@ def tune(
 
 
 @app.command()
+def doctor(as_json: bool = typer.Option(False, "--json")):
+    """Check this machine's AI toolchain (Python, PyTorch, GPU, llama.cpp…) and what to fix."""
+    from nanomesh.doctor import inspect
+    from nanomesh.report import doctor_view
+
+    with console.status("Checking the environment…"):
+        env = inspect(_resolve_device("local"))
+    if as_json:
+        console.print_json(data=env.model_dump())
+    else:
+        console.print(doctor_view(env))
+    if any(f.level == "fail" for f in env.findings):
+        raise typer.Exit(1)
+
+
+@app.command()
+def models(
+    folders: list[Path] = typer.Argument(None, help="Extra folders to search (also: NANOMESH_MODEL_DIRS)."),
+    context: int = typer.Option(4096, help="Context length to budget for."),
+    as_json: bool = typer.Option(False, "--json"),
+):
+    """Find models already on this machine (Hugging Face, LM Studio, Ollama, folders) and what fits."""
+    from nanomesh.discover import find_models
+    from nanomesh.report import models_view
+
+    device = _resolve_device("local")
+    with console.status("Looking for models…"):
+        found = find_models(device, folders or [], context)
+    if as_json:
+        console.print_json(data=[m.model_dump(exclude_none=True) for m in found])
+    else:
+        console.print(models_view(found, device.name))
+
+
+@app.command("train-plan")
+def train_plan_cmd(
+    model: str = typer.Argument(..., help="Model dir, known name (e.g. qwen2.5-7b), or size like '7b'."),
+    device_id: str = DeviceOpt,
+    seq_len: int = typer.Option(1024, "--seq-len", help="Training sequence length."),
+    batch: int = typer.Option(1, help="Micro-batch size."),
+    lora_rank: int = typer.Option(16, "--lora-rank", help="LoRA rank."),
+    no_checkpointing: bool = typer.Option(False, "--no-checkpointing", help="Assume gradient checkpointing is off."),
+    as_json: bool = typer.Option(False, "--json"),
+):
+    """Will fine-tuning fit? Memory for full fine-tuning, LoRA and QLoRA on a device."""
+    from nanomesh.report import train_plan_view
+    from nanomesh.training import train_plan
+
+    tp = train_plan(_analyze(model), _resolve_device(device_id), seq_len=seq_len, batch=batch,
+                    lora_rank=lora_rank, checkpointing=not no_checkpointing)
+    if as_json:
+        console.print_json(data=tp.model_dump())
+    else:
+        console.print(train_plan_view(tp))
+    if tp.recommended is None:
+        raise typer.Exit(2)
+
+
+@app.command()
+def mcp(config: bool = typer.Option(False, "--config", help="Print setup snippets for Claude Code, VS Code and Cursor.")):
+    """Run NanoMesh as a local MCP server, so coding agents can use it as a tool."""
+    from nanomesh import mcp as server
+
+    if config:
+        exe = shutil.which("nanomesh") or str(Path(sys.argv[0]).resolve())
+        console.print("Add NanoMesh to your coding agent. Everything runs locally.\n")
+        for client, snippet in server.client_configs(exe).items():
+            console.print(f"[bold]{client}[/]")
+            console.print(snippet, markup=False, highlight=False, soft_wrap=True)
+            console.print()
+        return
+    server.serve()
+
+
+@app.command()
 def results(
     device_id: str = typer.Option(None, "--device", "-d", help="Only this device (id, or 'local')."),
     as_json: bool = typer.Option(False, "--json"),
