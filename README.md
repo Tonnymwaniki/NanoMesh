@@ -53,6 +53,37 @@ nanomesh serve ~/models/Qwen2.5-1.5B-Instruct-GGUF/qwen2.5-1.5b-instruct-q8_0.gg
   (`http://127.0.0.1:8080/v1`). `nanomesh serve --status` shows running servers and
   `nanomesh serve --stop` stops them.
 
+### Project: what AI does this codebase use, and what could run locally?
+
+```sh
+nanomesh project .                       # this project, sized for this machine
+nanomesh project ~/code/app -d redmi-14c-4gb --json
+```
+
+It reads source files, notebooks, `requirements.txt`, `pyproject.toml` and `package.json`, and never runs
+anything. It finds:
+
+- **Cloud AI calls:** OpenAI, Anthropic, Google Gemini, Mistral, Cohere, Groq and LangChain, each with its
+  file and line. Each is classified as chat, embeddings, speech-to-text or image generation.
+- **Local AI:** transformers, sentence-transformers, llama.cpp and Ollama.
+- **AI dependencies and model files** (`.gguf`, `.safetensors`, `.onnx`…) in the repository.
+
+For each kind of cloud use it suggests a local replacement sized for the device:
+
+- the biggest Qwen2.5 chat model that runs at a usable speed there, and which database devices can also run it
+- a small embedding model
+- Whisper for speech-to-text
+
+It also shows the code change. `nanomesh serve` speaks the OpenAI API, so for the OpenAI SDK and LangChain
+that change is a base URL and a model name. It's honest about the limits: GPT-4-class models are far stronger
+on hard reasoning, and switching embedding models means re-embedding what's stored.
+
+To stay useful and safe, it:
+
+- only counts code: calls quoted in strings, docstrings and comments don't count
+- skips tests unless you pass `--include-tests`
+- never opens `.env` files and masks API keys in the snippets it shows
+
 ### Conditions, heat, battery and threads
 
 `nanomesh scan-device` ends with a **Right now** panel: power source and battery, power plan and
@@ -88,6 +119,7 @@ nanomesh mcp --config     # prints ready-to-paste setup for Claude Code, VS Code
 | `benchmark_results` | Everything measured here |
 | `environment_doctor` | Broken or mismatched Python/PyTorch/GPU/llama.cpp setups, with fixes |
 | `training_plan` | Will fine-tuning fit: full, LoRA or QLoRA |
+| `analyze_project` | The AI a codebase uses (file:line) and what could run locally instead, with the code change |
 | `search_models` | Hugging Face GGUFs sized for this machine: which file, download size, speed, quality |
 | `download_model` | Download a model (a background job), resuming and checksum-verified |
 | `benchmark_model` | Measure a model here (a background job) so plans use real numbers |
@@ -271,6 +303,7 @@ Treat estimates as a way to narrow the search; `benchmark` is the ground truth.
 - [ ] ONNX / OpenVINO / LiteRT export; AWQ/GPTQ; vision models
 - [x] Agent-ready: `doctor`, `models`, `train-plan` and a local MCP server for coding agents
 - [x] Search, download and serve: from "I want a model" to a local OpenAI-compatible endpoint
+- [x] Project scan: the AI a codebase uses and what could run locally instead
 - [ ] VS Code extension panel over the same tools
 - [ ] Shared benchmark database: upload `results.jsonl` so every user of a device benefits
 - [ ] Android on-device benchmarking, NPU profiles

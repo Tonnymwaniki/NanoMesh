@@ -35,7 +35,8 @@ INSTRUCTIONS = (
     "training setups: device_passport for what the machine can run, plan_model for which variant of a model "
     "to use (with measured speeds where available), list_local_models for models already downloaded, "
     "environment_doctor for installation problems, training_plan before fine-tuning. "
-    "It can also get a model running end to end: search_models (Hugging Face, sized for this machine), "
+    "analyze_project finds the AI a codebase uses (cloud APIs and local models) and what could run locally "
+    "instead, with the code change. It can also get a model running end to end: search_models (Hugging Face, sized for this machine), "
     "download_model, benchmark_model, then start_model_server for an OpenAI-compatible endpoint. Downloads and "
     "benchmarks run as jobs: poll job_status. Always tell the user the download size before downloading."
 )
@@ -312,6 +313,16 @@ def stop_model_server(port: int | None = None) -> dict:
         "stopped": [], "note": "Nothing to stop."}
 
 
+def analyze_project(path: str = ".", device: str | None = None, include_tests: bool = False) -> dict:
+    from nanomesh.project import analyze_project as scan_project
+
+    try:
+        report = scan_project(Path(path), _device(device), include_tests)
+    except ValueError as e:
+        raise ToolError(str(e)) from None
+    return report.model_dump(exclude_none=True)
+
+
 def environment_doctor() -> dict:
     from nanomesh.doctor import inspect
 
@@ -369,6 +380,15 @@ TOOLS: dict[str, tuple[Callable[..., dict], str, dict]] = {
          "seq_len": {"type": "integer", "description": "Training sequence length (default 1024)."},
          "batch": {"type": "integer", "description": "Micro-batch size (default 1)."},
          "lora_rank": {"type": "integer", "description": "LoRA rank (default 16)."}}),
+    "analyze_project": (analyze_project,
+        "Find the AI in a codebase: calls to OpenAI, Anthropic, Gemini, Mistral, Cohere, Groq and LangChain, local "
+        "models (transformers, llama.cpp, Ollama), AI dependencies and model files, with file:line. For each "
+        "cloud use: a local model sized for this machine (or a given device), which devices run it, the code "
+        "change to point the SDK at start_model_server, and caveats. Reads files only; skips .env files and masks "
+        "API keys.",
+        {"path": {"type": "string", "description": "Project folder (the workspace root). Default: current folder."},
+         "device": _DEVICE,
+         "include_tests": {"type": "boolean", "description": "Also count calls in test files (default false)."}}),
     "search_models": (search_models,
         "Search Hugging Face for GGUF models and size each one for this machine: which file to download "
         "(recommended), its download size, memory, predicted speed and quality. Matches repository names, so "
