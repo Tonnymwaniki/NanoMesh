@@ -159,10 +159,18 @@ class _Files(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class _LocalServer(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        # HTTPServer looks up its host's full name (reverse DNS), which can
+        # take tens of seconds on CI's macOS machines. Local tests don't need it.
+        http.server.socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "127.0.0.1", self.server_address[1]
+
+
 @pytest.fixture
 def hf_files(monkeypatch):
     _Files.files, _Files.drop_after, _Files.ignore_range, _Files.requests = {}, None, False, []
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Files)
+    server = _LocalServer(("127.0.0.1", 0), _Files)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     monkeypatch.setattr(download, "HF", f"http://127.0.0.1:{server.server_port}")
     monkeypatch.setattr(download, "_wait", lambda attempt: None)
@@ -325,7 +333,10 @@ class H(http.server.BaseHTTPRequestHandler):
         self.wfile.write(b'{{"status": "ok"}}')
     def log_message(self, *a):
         pass
-http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
+class S(http.server.HTTPServer):
+    def server_bind(self):  # skip the reverse DNS lookup (slow on CI's macOS machines)
+        http.server.socketserver.TCPServer.server_bind(self)
+S(("127.0.0.1", port), H).serve_forever()
 """
 
 
@@ -349,7 +360,12 @@ def _free_port():
         return s.getsockname()[1]
 
 
-def test_serve_start_status_stop(fake_server, tmp_path):
+def test_serve_start_status_stop(fake_server, tmp_path, monkeypatch):
+    # A proxy from the environment must not swallow checks on our own server.
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
     model = tmp_path / "Qwen2.5-1.5B-Instruct-Q8_0.gguf"
     model.write_bytes(b"GGUF")
     port = _free_port()

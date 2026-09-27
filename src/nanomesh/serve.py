@@ -25,6 +25,9 @@ from nanomesh.toolchain import Toolchain, ToolchainError, find_toolchain
 
 DEFAULT_PORT = 8080
 LOAD_TIMEOUT_S = 90
+# Talks to our own server on 127.0.0.1: never through a proxy from HTTP_PROXY
+# or the system settings.
+_LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 class Server(BaseModel):
@@ -70,7 +73,7 @@ def _alive(s: Server) -> bool:
 def health(port: int) -> str | None:
     """'ok' when serving, 'loading' while the model loads, None if nothing answers."""
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=3) as r:
+        with _LOCAL.open(f"http://127.0.0.1:{port}/health", timeout=3) as r:
             return "ok" if r.status == 200 else "loading"
     except urllib.error.HTTPError as e:
         return "loading" if e.code == 503 else None
