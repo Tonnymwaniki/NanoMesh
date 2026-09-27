@@ -36,7 +36,8 @@ INSTRUCTIONS = (
     "to use (with measured speeds where available), list_local_models for models already downloaded, "
     "environment_doctor for installation problems, training_plan before fine-tuning. "
     "analyze_project finds the AI a codebase uses (cloud APIs and local models) and what could run locally "
-    "instead, with the code change. fit_card sizes any model (speech, vision, embeddings, text) for this "
+    "instead, with the code change. search_datasets and dataset_card find and size datasets, including how "
+    "long fine-tuning on one takes here. fit_card sizes any model (speech, vision, embeddings, text) for this "
     "machine; search_models with a task finds them on Hugging Face and Kaggle. It can also get a model running "
     "end to end: search_models (Hugging Face, sized for this machine), "
     "download_model, benchmark_model, then start_model_server for an OpenAI-compatible endpoint. Downloads and "
@@ -292,6 +293,35 @@ def fit_card(model: str, device: str | None = None) -> dict:
     return card.model_dump(exclude_none=True)
 
 
+def search_datasets(query: str = "", task: str | None = None, source: str = "huggingface", limit: int = 5) -> dict:
+    from nanomesh.catalog import CatalogError
+    from nanomesh.datasets import hf_search, kaggle_search
+
+    limit = min(max(limit, 1), 10)
+    try:
+        cards = hf_search(query, _local(), task=task, limit=limit) if source in ("huggingface", "all") else []
+        if source in ("kaggle", "all"):
+            cards += kaggle_search(query or task or "data", _local(), limit=limit)
+    except CatalogError as e:
+        raise ToolError(str(e)) from None
+    return {"device": _local().name, "datasets": [c.model_dump(exclude_none=True) for c in cards]}
+
+
+def dataset_card(dataset: str, for_model: str | None = None, epochs: int = 1, seq_len: int = 1024,
+                 device: str | None = None) -> dict:
+    from nanomesh.catalog import CatalogError
+    from nanomesh.datasets import card, training_fit
+
+    dev = _device(device)
+    try:
+        c = card(dataset, dev)
+        if for_model:
+            c.training = training_fit(c, for_model, dev, epochs=epochs, seq_len=seq_len)
+    except (CatalogError, ValueError) as e:
+        raise ToolError(str(e)) from None
+    return c.model_dump(exclude_none=True)
+
+
 def job_status(job_id: str | None = None, wait_seconds: float = 0) -> dict:
     from nanomesh import jobs
 
@@ -446,6 +476,21 @@ TOOLS: dict[str, tuple[Callable[..., dict], str, dict]] = {
                                                     "qwen2.5-7b, C:/models/x.onnx. A family name alone "
                                                     "(whisper, yolo11) picks the best size."},
          "device": _DEVICE}),
+    "search_datasets": (search_datasets,
+        "Search datasets on Hugging Face (and Kaggle, with the user's token), each with its Dataset Card for this "
+        "machine: rows, download size and data cost, memory to load it, licence, downloads.",
+        {"query": {"type": "string", "description": "Words in the dataset's name (may be empty with a task)."},
+         "task": {"type": "string", "description": "Hugging Face task category, e.g. text-classification, "
+                                                   "translation, automatic-speech-recognition."},
+         "source": {"type": "string", "enum": ["huggingface", "kaggle", "all"]},
+         "limit": {"type": "integer", "description": "Datasets per source (default 5, max 10)."}}),
+    "dataset_card": (dataset_card,
+        "The Dataset Card of one dataset (Hugging Face id, kaggle:<owner>/<slug>, or a local CSV/TSV/JSONL/JSON "
+        "file or folder): rows and splits, columns, a preview, languages, licence, download size and data cost, "
+        "disk and memory it needs here, advice (stream it, take a slice). With for_model: tokens, whether "
+        "fine-tuning fits (full, LoRA or QLoRA) and hours here vs a free Colab T4 and an A100.",
+        {"dataset": {"type": "string"}, "for_model": {"type": "string", "description": "e.g. qwen2.5-1.5b"},
+         "epochs": {"type": "integer"}, "seq_len": {"type": "integer"}, "device": _DEVICE}),
     "search_models": (search_models,
         "Search for models and size each one for this machine. Without task: GGUF text models on Hugging Face "
         "(which file to download, size, speed, quality); turn tasks into model names: coding -> 'qwen2.5 coder "
@@ -495,7 +540,7 @@ TOOLS: dict[str, tuple[Callable[..., dict], str, dict]] = {
     "stop_model_server": (stop_model_server, "Stop a model server NanoMesh started (all if no port is given).",
         {"port": {"type": "integer"}}),
 }
-REQUIRED = {"plan_model": ["model"], "training_plan": ["model"], "fit_card": ["model"],
+REQUIRED = {"plan_model": ["model"], "training_plan": ["model"], "fit_card": ["model"], "dataset_card": ["dataset"],
             "download_model": ["repo"], "benchmark_model": ["path"], "cancel_job": ["job_id"],
             "start_model_server": ["path"]}
 # Most tools only read this machine's state and NanoMesh's own data, so
@@ -503,6 +548,8 @@ REQUIRED = {"plan_model": ["model"], "training_plan": ["model"], "fit_card": ["m
 READ_ONLY = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}
 ANNOTATIONS = {name: READ_ONLY for name in TOOLS} | {
     "search_models": READ_ONLY | {"openWorldHint": True},
+    "search_datasets": READ_ONLY | {"openWorldHint": True},
+    "dataset_card": READ_ONLY | {"openWorldHint": True},
     "download_model": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
     "benchmark_model": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False,
                         "openWorldHint": False},

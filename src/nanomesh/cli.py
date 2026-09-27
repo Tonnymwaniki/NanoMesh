@@ -690,6 +690,71 @@ def serve_cmd(
     console.print(f"\n[dim]Runs in the background. Stop with: nanomesh serve --stop · log: {server.log}")
 
 
+data_app = typer.Typer(help="Datasets: find them and see what they cost this device.", no_args_is_help=True)
+app.add_typer(data_app, name="data")
+
+
+@data_app.command("search")
+def data_search(
+    query: list[str] = typer.Argument(None, help="Words in the dataset's name, e.g. swahili news."),
+    task: str = typer.Option(None, help="Hugging Face task category, e.g. text-classification, translation."),
+    source: str = typer.Option("huggingface", help="huggingface, kaggle or all."),
+    limit: int = typer.Option(5),
+    as_json: bool = typer.Option(False, "--json"),
+):
+    """Search Hugging Face (and Kaggle) datasets, each sized for this device."""
+    from nanomesh.catalog import CatalogError
+    from nanomesh.datasets import hf_search, kaggle_search
+    from nanomesh.report import data_search_view
+
+    device = _resolve_device("local")
+    words = " ".join(query or [])
+    cards = []
+    with console.status("Searching datasets…"):
+        try:
+            if source in ("huggingface", "all"):
+                cards += hf_search(words, device, task=task, limit=limit)
+            if source in ("kaggle", "all"):
+                cards += kaggle_search(words or (task or "data"), device, limit=limit)
+        except CatalogError as e:
+            console.print(f"[red]{e}")
+            raise typer.Exit(1)
+    if as_json:
+        console.print_json(data=[c.model_dump(exclude_none=True) for c in cards])
+    else:
+        console.print(data_search_view(cards, device.name))
+
+
+@data_app.command("card")
+def data_card(
+    dataset: str = typer.Argument(..., help="Hugging Face id (e.g. stanfordnlp/imdb), kaggle:<owner>/<slug>, "
+                                            "or a local CSV/TSV/JSONL/JSON file or folder."),
+    for_model: str = typer.Option(None, "--for-model", help="Estimate fine-tuning this model on it, e.g. qwen2.5-1.5b."),
+    epochs: int = typer.Option(1),
+    seq_len: int = typer.Option(1024, "--seq-len"),
+    device_id: str = DeviceOpt,
+    as_json: bool = typer.Option(False, "--json"),
+):
+    """The Dataset Card: rows, columns, preview, licence, and what it costs this device."""
+    from nanomesh.catalog import CatalogError
+    from nanomesh.datasets import card, training_fit
+    from nanomesh.report import data_card_view
+
+    device = _resolve_device(device_id)
+    with console.status("Reading the dataset…"):
+        try:
+            c = card(dataset, device)
+            if for_model:
+                c.training = training_fit(c, for_model, device, epochs=epochs, seq_len=seq_len)
+        except (CatalogError, ValueError) as e:
+            console.print(f"[red]{e}")
+            raise typer.Exit(1)
+    if as_json:
+        console.print_json(data=c.model_dump(exclude_none=True))
+    else:
+        console.print(data_card_view(c))
+
+
 @app.command("train-plan")
 def train_plan_cmd(
     model: str = typer.Argument(..., help="Model dir, known name (e.g. qwen2.5-7b), or size like '7b'."),
